@@ -1,0 +1,98 @@
+# 单环境部署验证手册
+
+本项目使用一套 Cloudflare Worker、Queue 和运行时配置：
+
+- Worker：`cloudflare-ai-alert-analyzer`
+- Queue：`cloudflare-ai-alert-analyzer`
+
+本文不授权远端部署、Secret 写入或 Cloudflare 资源创建；执行这些操作前仍需用户明确授权。
+
+## Dashboard 运行时配置
+
+进入 Cloudflare Dashboard：
+
+```text
+Workers & Pages
+-> cloudflare-ai-alert-analyzer
+-> Settings
+-> Variables and Secrets
+```
+
+添加三个 `Secret`：
+
+```text
+CLOUDFLARE_API_TOKEN
+LLM_API_KEY
+WECOM_WEBHOOK_URL
+```
+
+添加两个普通 `Text` 变量：
+
+```text
+LLM_BASE_URL
+LLM_MODEL
+```
+
+`LLM_BASE_URL` 填 OpenAI 兼容中转站的 `/v1` 基础地址，不包含 `/chat/completions`。例如中转站请求地址为 `https://relay.example.invalid/v1/chat/completions` 时，变量值应为 `https://relay.example.invalid/v1`。`LLM_MODEL` 必须使用中转站支持的模型标识。
+
+`CLOUDFLARE_API_TOKEN` 必须拥有 Cloudflare GraphQL Analytics 只读权限并覆盖告警 `zone_tag` 对应 Zone。`WECOM_WEBHOOK_URL` 必须是企业微信机器人完整 Webhook URL。
+
+不要把真实值写入 `wrangler.jsonc`、Git、文档、夹具或日志。
+
+## 本地配置
+
+本地 `npm run dev` 可从仓库根目录的 `.dev.vars` 读取同名变量：
+
+```dotenv
+CLOUDFLARE_API_TOKEN="local-read-only-token"
+LLM_API_KEY="local-relay-key"
+WECOM_WEBHOOK_URL="https://example.invalid/wecom-test-webhook"
+LLM_BASE_URL="https://relay.example.invalid/v1"
+LLM_MODEL="relay-model-name"
+```
+
+`.dev.vars*` 已被 Git 忽略。本地测试使用 Fetch Mock，不得填写或调用真实企业微信机器人。
+
+## 部署前门禁
+
+```bash
+npm ci
+npm run types
+npm run typecheck
+npm run lint
+npm test
+npx wrangler deploy --dry-run --keep-vars
+openspec validate implement-waf-alert-analyzer-mvp --strict
+```
+
+`--keep-vars` 用于保留 Dashboard 中管理的 `LLM_BASE_URL` 和 `LLM_MODEL`。所有命令必须退出码为 0。
+
+## 端到端验证
+
+1. 向 `POST /api/v1/alerts/cloudflare` 发送脱敏的有效 WAF Payload。
+2. 确认只有 Queue 入队成功后才返回 `202 Accepted`。
+3. 确认 Queue 按 `settle_seconds` 延迟投递且 `max_batch_size = 1`。
+4. 使用相同 `incident_id` 和 `correlation_id` 关联 Workers Logs。
+5. 确认 Queue 重试不修改 `query_started_at` 或 `analysis_window`。
+6. 确认 GraphQL 使用 `total_events` 计算比例，并保留 Payload `events_count` 作为参考。
+7. 确认 LLM 请求发往 `LLM_BASE_URL + /chat/completions`，模型为 `LLM_MODEL`。
+8. 模拟 LLM 不可用，确认规则降级通知仍能发送。
+9. 模拟企业微信最终失败，确认记录 `notification_failed` 且不重跑 GraphQL 或 AI。
+10. 检查日志不含 Token、API Key、Authorization 或企业微信 Webhook URL。
+
+## Dashboard 同窗口核验
+
+使用通知中的同一个 `analysis_window.start` 与 `analysis_window.end` 核验：
+
+- `total_events`
+- Top IP
+- Top Path
+- Top Country
+- Top ASN
+- Action
+
+记录可解释的采样、聚合或口径差异。
+
+## 回滚
+
+验证失败时部署上一已验证 Worker 版本。不要扩大在途 Queue Message 的固定窗口，不要清空 Queue 或删除远端资源。必要时暂停 Queue consumer，并保留脱敏日志和事件身份标识。

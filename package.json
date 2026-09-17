@@ -1,0 +1,29 @@
+{
+  "name": "cloudflare-ai-alert-analyzer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "types": "wrangler types --env-interface CloudflareWorkerEnv",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "deploy": "wrangler deploy --keep-vars"
+  },
+  "dependencies": {
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.1.10",
+    "@eslint/js": "10.0.1",
+    "eslint": "10.10.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.70.0",
+    "vitest": "4.1.11",
+    "wrangler": "4.132.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

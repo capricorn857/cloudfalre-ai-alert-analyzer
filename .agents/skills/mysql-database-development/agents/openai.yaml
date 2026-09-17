@@ -1,0 +1,8 @@
+interface:
+  display_name: "MySQL Database Development"
+  short_description: "Apply team MySQL standards and SQL quality gates"
+  default_prompt: "Use $mysql-database-development to design or review this MySQL change."
+
+policy:
+  allow_implicit_invocation: true
+

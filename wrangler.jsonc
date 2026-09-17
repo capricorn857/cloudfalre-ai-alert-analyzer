@@ -1,0 +1,49 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cloudflare-ai-alert-analyzer",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-16",
+  "observability": {
+    "logs": { "enabled": true }
+  },
+  "secrets": {
+    "required": [
+      "CLOUDFLARE_API_TOKEN",
+      "LLM_API_KEY",
+      "WECOM_WEBHOOK_URL"
+    ]
+  },
+  "queues": {
+    "producers": [
+      { "binding": "ALERT_QUEUE", "queue": "cloudflare-ai-alert-analyzer" }
+    ],
+    "consumers": [
+      {
+        "queue": "cloudflare-ai-alert-analyzer",
+        "max_batch_size": 1,
+        "max_batch_timeout": 5,
+        "max_retries": 2
+      }
+    ]
+  },
+  "vars": {
+    "BUSINESS_CONFIG": {
+      "beforeMinutes": 30,
+      "settleSeconds": 60,
+      "sampleLimit": 50,
+      "requestTimeoutMs": 10000,
+      "retryCount": 2,
+      "displayTimeZone": "Asia/Shanghai",
+      "rules": {
+        "ipConcentration": { "medium": 30, "high": 50 },
+        "pathConcentration": { "medium": 30, "high": 50 },
+        "countryConcentration": { "medium": 40, "high": 70 },
+        "asnConcentration": { "medium": 40, "high": 70 },
+        "allowRatio": { "medium": 50, "high": 80 },
+        "blockRatio": { "medium": 50, "high": 80 },
+        "userAgentConcentration": { "medium": 50, "high": 80 },
+        "requestRate": { "medium": 5, "high": 20 }
+      }
+    }
+  }
+}

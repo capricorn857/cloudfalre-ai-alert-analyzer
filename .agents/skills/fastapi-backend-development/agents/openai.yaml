@@ -1,0 +1,8 @@
+interface:
+  display_name: "FastAPI Backend Development"
+  short_description: "Apply the team FastAPI architecture and quality gate"
+  default_prompt: "Use $fastapi-backend-development to implement or review this FastAPI backend change."
+
+policy:
+  allow_implicit_invocation: true
+

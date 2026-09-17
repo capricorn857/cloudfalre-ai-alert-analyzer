@@ -1,0 +1,8 @@
+interface:
+  display_name: "OpenSpec + Superpowers Workflow"
+  short_description: "Run approved OpenSpec changes with Superpowers gates"
+  default_prompt: "Use $openspec-superpowers-workflow to route and execute this change through the team workflow."
+
+policy:
+  allow_implicit_invocation: true
+

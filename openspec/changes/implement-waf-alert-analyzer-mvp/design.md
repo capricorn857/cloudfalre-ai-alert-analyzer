@@ -1,0 +1,247 @@
+# 设计说明：Cloudflare WAF 告警分析 MVP
+
+## Context
+
+当前仓库只有需求、技术栈和本 Change 的 proposal，没有 Worker 工程或生产代码。目标行为由本 Change 的五份 delta Specs 定义。本设计需要同时建立 HTTP 接入、Queue 消费、三类外部 HTTP 客户端、确定性分析、AI 降级、通知和运行保障边界，并遵守 Cloudflare Workers 的运行时与资源约束。
+
+关键约束如下：
+
+- 使用 TypeScript、Module Worker、Cloudflare Queues、原生 Fetch API、Zod、Wrangler、Vitest 和 ESLint。
+- `fetch()` 只校验、映射、固定窗口和入队；`queue()` 编排一次快照分析。
+- 不使用数据库、KV、Durable Objects、Workflows、第三方队列、容器或新的 LLM SDK。
+- 所有外部输入与输出先作为 `unknown`，通过 Zod 后才进入领域层。
+- 只读分析，不执行 Cloudflare 配置变更。
+
+## Goals / Non-Goals
+
+**Goals:**
+
+- 建立可在 Workers Runtime 中测试的单 Worker、单 Queue MVP。
+- 通过不可变 Queue Message 保证延迟投递与技术重试共享同一分析窗口。
+- 将确定性事实、规则判断、AI 推断和通知呈现严格分层。
+- 对 Cloudflare、LLM 和企业微信失败采用与业务语义匹配的有限重试或降级。
+- 用可关联、脱敏的 JSON 日志支持单环境验收和故障定位。
+
+**Non-Goals:**
+
+- 持久化 Incident、严格幂等、DLQ、持续跟踪、二次快照或初报/终报。
+- Web UI、历史检索、用户权限、自动化安全变更。
+- 抽象通用工作流引擎或为尚未支持的告警类型实现 Analyzer。
+- 在本 Change 中创建远端 Cloudflare 资源、写入真实 Secrets 或执行远端部署。
+
+## 总体方案
+
+同一个 Module Worker 暴露 `fetch` 与 `queue` Handler。`fetch` 将公网输入收敛成经过校验的 `QueueMessage` 并以 `settleSeconds` 延迟入队；`queue` 校验固定窗口后，调用 WAF 分析 Pipeline。Pipeline 只执行一次 Cloudflare 数据快照，随后依次标准化、统计、规则分析、可选 AI 分析、格式化与企业微信发送。
+
+```text
+POST /api/v1/alerts/cloudflare
+  -> route/body/schema validation
+  -> CloudflareAlertPayload -> Alert
+  -> fix webhook_received_at/query_started_at/analysis_window
+  -> Queue.send(message, delaySeconds)
+  -> 202
+
+Queue<QueueMessage> (max_batch_size = 1)
+  -> validate message and fixed window
+  -> collect GraphQL snapshot
+  -> normalize Incident
+  -> calculate Statistics
+  -> evaluate Findings
+  -> request/validate AIAnalysis or build fallback
+  -> format immutable WeCom message
+  -> send with isolated retry
+  -> acknowledge
+```
+
+## 组件与边界
+
+| 模块 | 责任 | 明确不负责 |
+|---|---|---|
+| `src/index.ts` | 注册 Handler、组合依赖 | 路由细节、分析、重试、格式化 |
+| `src/api/` | 路由、体积限制、Payload 校验、HTTP 响应 | GraphQL、LLM、企微调用 |
+| `src/domain/` | Zod 契约及推导类型 | 网络 I/O、流程编排 |
+| `src/pipeline/` | 固定窗口、告警分发、消费流程编排 | 外部响应解析细节、统计算法 |
+| `src/analyzers/` | 组织 WAF 所需数据和分析步骤 | Handler 路由、通知传输 |
+| `src/clients/` | Fetch、超时、HTTP/协议校验、阶段内重试 | 领域风险判断、消息格式 |
+| `src/analysis/` | 标准化、统计、规则纯函数 | 网络 I/O、AI 文案 |
+| `src/notification/` | 事实/AI 分区格式化和长度控制 | 使用未校验 LLM 文本、重算统计 |
+| `src/config/` | env 与业务参数校验 | 静默修正危险配置 |
+| `src/observability/` | 错误分类、脱敏单行 JSON 日志 | 输出 Secret 或大型响应 |
+
+依赖方向为 Handler -> Pipeline -> 领域服务/Clients。Clients 只依赖通用错误与自身响应 Schema；纯领域模块不依赖 Worker bindings。所有时间由注入的时钟产生，所有网络由注入的 `fetch` 或窄接口执行，便于 Workers Runtime 测试。
+
+## 数据与接口契约
+
+### 边界 Schema
+
+领域契约按文件拆分，并用 Zod 推导 TypeScript 类型：
+
+- `CloudflareAlertPayloadSchema`：仅在 Webhook 边界保留 Cloudflare 字段名。
+- `AlertSchema`：内部 camelCase 命名，保留原始事件数参考值，但不保留无限制原始 Payload。
+- `AnalysisWindowSchema`：UTC `start` 与 `end`，验证 `start <= end`。
+- `QueueMessageSchema`：`alert`、`incidentId`、`correlationId`、`webhookReceivedAt`、`queryStartedAt`、`analysisWindow` 和计算窗口使用的配置快照。
+- `CloudflareGraphQLResponseSchema`：分别校验聚合与样本响应，包括 HTTP 200 下的 GraphQL `errors`。
+- `IncidentSchema`、`StatisticsSchema`、`FindingSchema`、`AIAnalysisSchema`：模块间唯一允许传递的分析数据。
+- `EnvSchema` 与 `BusinessConfigSchema`：将字符串 vars 解析成有范围约束的只读配置。
+
+`incident_id` 优先使用稳定的 `alert_correlation_id`；若外部值不满足内部标识约束，则在入队前生成并固化新的 UUID。`correlation_id` 始终保留外部关联值。两者在 Queue 重试中均不改变。
+
+### 窗口和时间
+
+窗口只在 `fetch` 路径计算一次：
+
+```text
+webhook_received_at = clock.now()
+query_started_at = webhook_received_at + settle_seconds
+analysis_window.start = alert_time - before_minutes
+analysis_window.end = query_started_at
+```
+
+Queue Message 同时保存计算结果和 `beforeMinutes`/`settleSeconds` 配置快照。Consumer 校验等式但不基于当前配置修正消息，从而避免配置变更改变在途消息语义。`processing_started_at` 只写日志。
+
+### GraphQL 数据采集
+
+Cloudflare Client 使用 `firewallEventsAdaptiveGroups` 获取 `total_events` 和各维度聚合，并使用受限查询获取最多 `sampleLimit` 条样本。所有查询共享 `zoneTag`、`analysisWindow.start` 和 `analysisWindow.end`，变量与 Query 文本分离，Token 只进入 Authorization Header。
+
+选择“少量按用途拆分的查询”，而不是一个超大查询：聚合与样本失败可以清晰分类，响应 Schema 较小，也便于限制样本。它们仍属于同一轮业务快照，不得因空结果再次采集。
+
+### 统计和规则
+
+Normalizer 只做字段映射、允许值归一和缺失值处理。Statistics 使用 GraphQL `total_events` 为唯一比例分母；零分母返回 `null`/数据不足状态，不返回零比例来暗示已观察到分布。显示层统一格式化到一位小数，内部保留足够精度。
+
+Rules 接收 `Statistics`、受限样本和已校验阈值，输出可序列化 Findings。每个 Finding 包含稳定 `type`、`level`、原始数值、阈值和 Evidence 引用。首期规则全部是纯函数，不在规则内部读取 env。
+
+### AI 契约
+
+LLM Client 使用配置的 OpenAI 兼容 HTTP endpoint，不引入 SDK。Prompt 分为固定系统约束和一个结构化输入对象；不包含原始 GraphQL 响应或 Credential。返回体先解析协议层，再提取 JSON，再由 `AIAnalysisSchema` 校验，并执行 Evidence 交叉检查：关键实体和值必须能在输入中找到，建议不得声称已执行变更。
+
+若任一环节失败，Pipeline 构造显式 `AIUnavailable` 状态。该状态不是异常终止，不触发 Queue 重放。
+
+### 通知契约
+
+Formatter 接收一个判别联合：成功 AI、AI 降级、空数据或 Cloudflare 采集失败。它生成固定的企业微信文本消息，始终优先保留身份标识、窗口、数据截至时间和状态。Top 列表与各文本字段有固定上限，总长度在发送前校验；截断只发生在 Formatter。
+
+通知时间按配置展示时区转换，领域数据保持 UTC。WeCom Client 只接受已经完成格式化的字符串，因此通知传输重试不会触发上游计算。
+
+## Decisions
+
+### Decision 1: 单 Worker + 单 Queue
+
+选择一个 Worker 同时实现 producer 与 consumer，并用一条分析 Queue 解耦。
+
+- 优点：最少的部署单元、Bindings 和跨服务契约，符合 MVP。
+- 放弃方案：拆分 ingestion/analysis Worker，会增加部署、版本和消息兼容成本；`ctx.waitUntil()` 无法提供所需可靠投递和延迟语义。
+
+### Decision 2: 入队前固定窗口
+
+选择在 Webhook 通过校验后立即固定逻辑截止时间，并通过 Queue 延迟等待数据可用。
+
+- 优点：重试口径稳定，可与 Dashboard 使用同一窗口核验。
+- 放弃方案：Consumer 按实际启动时间计算会随排队和重试漂移；轮询数据收敛属于持续跟踪，超出 MVP。
+
+### Decision 3: 无持久化幂等
+
+接受 Queue 至少一次语义，依靠稳定身份标识识别极端重复。
+
+- 优点：不引入没有产品需求支撑的 D1/KV/Durable Objects。
+- 代价：消费者在特定故障点可能发送重复通知。严格去重必须作为新 Change 评估存储和一致性。
+
+### Decision 4: Clients 拥有阶段内重试
+
+GraphQL 与 WeCom Client 对明确的临时错误做 1 至 2 次短退避重试，Pipeline 决定最终降级或 Queue 失败。LLM 不可用直接降级。
+
+- 优点：重试不会跨越阶段边界，WeCom 重试不重复分析，LLM 失败不重放整条消息。
+- 放弃方案：对任何错误统一抛给 Queue 会重复 GraphQL、LLM 甚至通知，且窗口虽固定仍浪费资源。
+
+### Decision 5: Zod Schema 作为运行时契约源
+
+外部输入、Queue、领域对象、配置和外部输出均先校验，并从 Schema 推导类型。
+
+- 优点：避免 TypeScript 类型与运行时事实分离，Queue 消息也能防止版本或手工注入错误。
+- 放弃方案：仅使用 TypeScript interface 无法保护运行时边界；手写成对校验器容易漂移。
+
+### Decision 6: 确定性分析先于 AI
+
+程序计算 Statistics 与 Findings，AI 只解释和提供受 Evidence 限制的建议。
+
+- 优点：统计可测试、可核验；LLM 失败时仍有完整基础信息。
+- 放弃方案：让 LLM 读取原始事件并计算会增加幻觉、成本和不可复现性。
+
+### Decision 7: 依赖注入到窄接口
+
+Pipeline 依赖 `CloudflareAnalyticsClient`、`AIAnalysisClient`、`NotificationClient`、`Logger` 和 `Clock` 等窄接口，`index.ts` 只负责实例化。
+
+- 优点：保留模块边界并可在 Workers 集成测试中替换网络行为。
+- 放弃方案：全局单例或在领域函数中直接调用 `fetch` 会隐藏依赖并使重试边界难以测试。
+
+## 错误处理
+
+错误类型分为：
+
+| 分类 | 示例 | 行为 |
+|---|---|---|
+| `input_invalid` | Webhook/Queue Schema 失败 | 拒绝或确认丢弃，不调用下游 |
+| `config_invalid` | 缺 Secret、阈值非法 | 快速失败，脱敏记录 |
+| `dependency_retryable` | timeout、429、5xx | 当前 Client 有限重试 |
+| `dependency_permanent` | 401、协议/Schema 错误 | 不做盲目重试，进入对应失败路径 |
+| `ai_degraded` | LLM 或 AI Schema 失败 | 规则降级并继续通知 |
+| `notification_failed` | WeCom 最终失败 | 记录最终状态并确认消息，禁止 Queue 重放整条分析链 |
+| `post_send_noncritical` | 成功发送后的日志异常 | 吞并并确认消息，避免重复通知 |
+
+所有超时使用 `AbortSignal.timeout` 或兼容的 AbortController 方案，并在 Client 边界转换为稳定错误码。退避不得使用长时间主动 sleep；短暂客户端退避必须受配置和 Worker 执行预算约束。日志只记录可诊断摘要。
+
+Queue `max_batch_size = 1`，使确认只对应一个事件。无效 Queue Message 作为不可重试毒消息处理，记录后确认，避免无限重放。GraphQL 最终失败仍尝试发送基础异常通知。WeCom Client 在同一次消费中完成有限重试；若仍失败，Pipeline 记录 `notification_failed` 并确认 Queue Message，不把通知失败抛给 Queue，因为整条消息重放会重新查询 GraphQL 和重跑 AI。MVP 接受最终通知失败需要通过日志人工补偿；若要求可靠的通知级重放，应以新 OpenSpec 引入独立通知任务或持久化状态。
+
+## 兼容与恢复
+
+这是首次实现，无历史应用数据迁移。兼容重点是消息版本和配置发布：
+
+- `QueueMessage` 包含显式 `schemaVersion: 1`。Consumer 对未知版本记录不可重试错误，不猜测字段。
+- 发布前由人工准备单一 Queue、Dashboard vars 和 Secrets，再部署同时兼容 producer/consumer 的 Worker；本 Change 只生成操作清单，不自动执行远端操作。
+- 配置或代码回滚通过 Wrangler 部署上一已验证版本完成。由于没有持久化数据，不需要数据回滚。
+- 回滚期间已经入队的 v1 消息必须由回滚版本继续支持；若未来破坏消息契约，应先部署双读 Consumer，再升级 producer。
+- 企业微信成功是不可逆外部副作用。成功返回后任何本地非关键失败不得升级为 Queue retry。
+
+## 测试计划
+
+### 单元测试
+
+- Payload、Queue Message、配置、GraphQL 响应和 AI 输出 Schema。
+- 窗口计算、UTC 归一和 Consumer 窗口一致性校验。
+- Normalizer、零分母与各比例 Statistics、阈值边界 Rules。
+- AI Evidence 交叉校验、建议限制和降级状态。
+- Formatter 必填字段、时区、长度控制、空数据与异常通知。
+- 错误分类、重试判定和日志脱敏。
+
+### Workers 集成测试
+
+- 路由、方法、请求体大小、无效 Payload、受支持/不支持类型、Queue 入队失败和 `202` 时序。
+- Queue 延迟参数、固定消息窗口、晚到/重试消费不漂移。
+- Fetch Mock 覆盖 GraphQL HTTP 200 + `errors`、timeout、429、5xx、永久错误和重试耗尽。
+- LLM 成功、协议错误、Schema 错误、Evidence 越界及规则降级通知。
+- WeCom 阶段内重试、成功后不重放、最终失败记录并确认且不重复上游分析。
+- 捕获日志并扫描 Token、API Key、Webhook URL、Authorization 和测试哨兵 Secret。
+
+### 单环境验证
+
+在人工准备单一 Queue、Cloudflare Token、LLM 中转站和企业微信机器人后，以脱敏 WAF Payload 完成一次端到端验证，并用同一窗口对照 Cloudflare Dashboard。记录 Worker/Queue 状态和日志关联字段。远端部署、Secret 写入与真实告警验证不属于自动执行范围。
+
+## Risks / Trade-offs
+
+- [Queue 至少一次可能产生重复通知] -> 固定 `incident_id`/`correlation_id` 并在通知显著展示；严格去重另立 Change。
+- [Security Analytics 存在采样或聚合延迟] -> 固定延迟后做一次快照、展示窗口和口径，不声称覆盖完整事件生命周期。
+- [未鉴权公网 Webhook 可被伪造或滥用] -> 严格 Schema、受支持类型、体积限制、快速拒绝和平台流量观测；入站鉴权作为后续独立安全 Change。
+- [多个 GraphQL 请求可能部分成功] -> 只有满足 Incident 最小数据契约才进入统计；否则发送采集失败通知，不拼接不可解释的部分结果。
+- [AI Evidence 语义校验无法证明所有自然语言均正确] -> 限制字段与长度、验证关键实体和值、Formatter 分隔事实和推断；人工仍需根据 Evidence 决策。
+- [Workers 执行预算限制短暂退避] -> 严格限制尝试次数、请求超时、样本和输出大小；在已部署 Worker 记录各阶段耗时。
+- [成功通知后进程异常仍可能发生平台级重复] -> 避免应用主动抛错，但无持久化幂等时不能承诺 exactly-once。
+
+## Migration Plan
+
+1. 初始化 npm/TypeScript/Workers/Vitest/ESLint 工程并锁定 `compatibility_date`。
+2. 完成纯领域契约、配置、窗口和分析模块及单元测试。
+3. 完成 Clients、Pipeline、Handlers 和 Workers 集成测试。
+4. 运行 `npm run types`、`npm run typecheck`、`npm run lint`、`npm test` 和 Credential 扫描。
+5. 由人工创建并配置单一 Worker、Queue、Dashboard vars、Secrets 和企业微信机器人后执行部署。
+6. 执行固定窗口端到端验证并核对 Dashboard；问题通过部署上一版本回滚。
+7. 准备单环境发布检查清单，等待用户单独明确授权资源操作、Secret 写入与部署。

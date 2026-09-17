@@ -1,0 +1,7 @@
+interface:
+  display_name: "GitNexus Impact Analysis"
+  short_description: "Assess symbol and flow impact for team changes"
+  default_prompt: "Use $gitnexus-impact-analysis to assess this change's dependency and execution-flow impact."
+
+policy:
+  allow_implicit_invocation: true
