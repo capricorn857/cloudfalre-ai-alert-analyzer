@@ -1,10 +1,11 @@
 import type { AIAnalysisClient } from "../clients/contracts";
 import { AIAnalysisSchema, type AIAnalysis, type AIUnavailable } from "../domain/ai-analysis";
 import type { SnapshotAnalysisResult } from "../domain/analysis-result";
+import { toExternalFailure, type ExternalFailure } from "../observability/errors";
 
 export type AIAnalysisResult =
   | { readonly status: "available"; readonly analysis: AIAnalysis }
-  | AIUnavailable;
+  | (AIUnavailable & { readonly failure?: ExternalFailure });
 
 export async function runAIAnalysis(
   snapshot: SnapshotAnalysisResult,
@@ -29,7 +30,11 @@ export async function runAIAnalysis(
       }),
     );
     return { status: "available", analysis };
-  } catch {
-    return { status: "unavailable", reason: "AI analysis unavailable" };
+  } catch (error) {
+    return {
+      status: "unavailable",
+      reason: "AI analysis unavailable",
+      failure: toExternalFailure(error, "llm"),
+    };
   }
 }

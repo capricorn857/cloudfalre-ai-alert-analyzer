@@ -6,7 +6,7 @@ import type { CloudflareAnalyticsClient } from "../clients/contracts";
 import type { RulesConfig } from "../config/rules";
 import type { SnapshotAnalysisResult } from "../domain/analysis-result";
 import type { QueueMessage } from "../domain/queue-message";
-import { AppError } from "../observability/errors";
+import { toExternalFailure } from "../observability/errors";
 
 export async function analyzeWafAlert(
   message: QueueMessage,
@@ -21,10 +21,12 @@ export async function analyzeWafAlert(
       sampleLimit: message.configSnapshot.sampleLimit,
     });
   } catch (error) {
+    const failure = toExternalFailure(error, "cloudflare");
     return {
       status: "collection_failed",
       message,
-      errorCode: error instanceof AppError ? error.code : "cloudflare_unexpected",
+      errorCode: failure.errorCode,
+      failure,
     };
   }
 

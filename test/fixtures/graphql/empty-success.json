@@ -1,0 +1,18 @@
+{
+  "data": {
+    "viewer": {
+      "zones": [
+        {
+          "total": [{ "count": 0 }],
+          "topIps": [],
+          "topPaths": [],
+          "topHosts": [],
+          "topCountries": [],
+          "topAsns": [],
+          "actions": [],
+          "sources": []
+        }
+      ]
+    }
+  }
+}

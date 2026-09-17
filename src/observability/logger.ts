@@ -14,12 +14,41 @@ export interface LoggerOptions {
 }
 
 const sensitiveKey = /authorization|token|api.?key|secret|webhook.?url/i;
+const sensitiveParameter = /^(?:authorization|token|api[_-]?key|secret|key)$/iu;
+const urlPattern = /https?:\/\/[^\s"'<>]+/giu;
+const sensitiveAssignment = /\b(authorization|token|api[_-]?key|secret|key)=([^\s&]+)/giu;
 
 function replaceSecrets(value: string, secrets: readonly string[]): string {
   return secrets.reduce(
     (redacted, secret) => (secret.length === 0 ? redacted : redacted.replaceAll(secret, "[REDACTED]")),
     value,
   );
+}
+
+function redactSensitiveUrls(value: string): string {
+  return value.replace(urlPattern, (candidate) => {
+    try {
+      const url = new URL(candidate);
+      const parameters: string[] = [];
+      url.searchParams.forEach((_value, parameter) => {
+        parameters.push(parameter);
+      });
+      for (const parameter of parameters) {
+        if (sensitiveParameter.test(parameter)) url.searchParams.set(parameter, "[REDACTED]");
+      }
+      return url.toString().replaceAll("%5BREDACTED%5D", "[REDACTED]");
+    } catch {
+      return "[REDACTED_URL]";
+    }
+  });
+}
+
+function sanitizeString(value: string, secrets: readonly string[], maximum: number): string {
+  const redacted = redactSensitiveUrls(replaceSecrets(value, secrets)).replace(
+    sensitiveAssignment,
+    "$1=[REDACTED]",
+  );
+  return redacted.length <= maximum ? redacted : `${redacted.slice(0, maximum)}...[TRUNCATED]`;
 }
 
 function sanitize(
@@ -31,13 +60,12 @@ function sanitize(
 ): unknown {
   if (sensitiveKey.test(key)) return "[REDACTED]";
   if (typeof value === "string") {
-    const redacted = replaceSecrets(value, secrets);
-    return redacted.length <= maximum ? redacted : `${redacted.slice(0, maximum)}...[TRUNCATED]`;
+    return sanitizeString(value, secrets, maximum);
   }
   if (typeof value !== "object" || value === null) return value;
   if (value instanceof Error) {
     return {
-      name: value.name,
+      name: sanitizeString(value.name, secrets, maximum),
       message: sanitize(value.message, "message", secrets, maximum, seen),
     };
   }

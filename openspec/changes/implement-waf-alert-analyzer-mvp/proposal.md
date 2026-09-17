@@ -8,6 +8,8 @@ status: approved
 
 Cloudflare 现有 WAF 告警只能说明异常已经发生，运维和安全人员仍需手工进入 Dashboard 还原攻击来源、目标、防护效果和风险。项目需要在 Cloudflare Workers 上建立一条只读、可降级、可追溯的自动分析链路，把有效告警转换为可直接用于初步研判的企业微信通知。
 
+生产验收已确认 Webhook、Queue producer、Consumer 和固定分析窗口正常，但外部 API 失败日志不足以定位故障：底层 Fetch 异常会被统一改写而丢失 timeout、network 及运行时可识别的 DNS/TLS/connection 信息，GraphQL 采集失败的具体错误码也未进入最终通知失败日志。需要在不改变现有处理语义的前提下补齐稳定、可查询且安全脱敏的外部依赖失败观测契约。
+
 ## 目标
 
 - 初始化基于 TypeScript、Cloudflare Workers、Cloudflare Queues、Zod、Wrangler、Vitest 和 ESLint 的 MVP 工程。
@@ -17,6 +19,9 @@ Cloudflare 现有 WAF 告警只能说明异常已经发生，运维和安全人�
 - 调用兼容 OpenAI HTTP 接口生成结构化 AI 分析；调用失败或输出无效时降级为规则分析。
 - 格式化并发送企业微信通知，展示分析窗口、事实、结论、建议、`incident_id` 和 `correlation_id`。
 - 增加有限重试、错误分类、结构化脱敏日志、Workers Runtime 测试和单环境端到端验收流程。
+- 为外部 API 失败定义稳定、可查询的日志字段，至少包含 `external_service`、`error_code`、`failure_kind`、`retryable` 和 `duration_ms`；HTTP 失败补充 `http_status`，GraphQL 采集失败补充 `snapshot_error_code`。
+- 区分 timeout、network、运行时可识别的 DNS/TLS/connection 和 unknown Fetch 失败；企业微信响应只记录规范化结果类别，不记录原始响应。
+- 如保留异常名称或消息用于诊断，统一执行 Secret 替换、敏感 URL 清除和长度限制，并以包含哨兵敏感值的自动化测试验证。
 - 准备单套 Worker/Queue 的发布检查清单和人工门禁，但不创建远端资源、不写入真实 Secret，也不执行部署。
 
 ## 非目标
@@ -24,6 +29,8 @@ Cloudflare 现有 WAF 告警只能说明异常已经发生，运维和安全人�
 - 不建设 Web 管理后台、权限系统、历史检索、持续事件跟踪或初报/终报机制。
 - 不自动封禁 IP，不修改 WAF、Rate Limit 或其他 Cloudflare 配置。
 - 不引入数据库、D1、KV、Durable Objects、R2、Workflows、第三方队列、容器或自建服务器。
+- 不引入代理、中转服务或新的 SDK，不改变 Queue 固定窗口、有限重试和至少一次投递语义。
+- 不因企业微信最终失败重新执行 GraphQL、统计、规则或 AI 分析。
 - 不在本 Change 中创建远端资源、写入真实 Secret 或执行远端部署。
 
 ## Capabilities
@@ -31,10 +38,10 @@ Cloudflare 现有 WAF 告警只能说明异常已经发生，运维和安全人�
 ### New Capabilities
 
 - `cloudflare-alert-ingestion`: Webhook 路由、Payload 校验、WAF 告警过滤与映射、固定窗口消息构造和 Queue 入队。
-- `waf-snapshot-analysis`: Queue 消费、固定窗口 GraphQL 数据采集、Incident 标准化、统计和确定性规则分析。
+- `waf-snapshot-analysis`: Queue 消费、固定窗口 GraphQL 数据采集、采集错误码传播、Incident 标准化、统计和确定性规则分析。
 - `ai-assisted-analysis`: 受 Evidence 约束的结构化 AI 分析，以及 LLM 不可用时的规则降级。
-- `wecom-alert-notification`: 使用已校验领域数据生成固定格式通知，并可靠发送到企业微信机器人。
-- `worker-operations`: 配置校验、错误分类、有限重试、日志脱敏、单环境配置和部署验证要求。
+- `wecom-alert-notification`: 使用已校验领域数据生成固定格式通知，可靠发送到企业微信机器人，并区分 Fetch、HTTP、协议和业务响应失败。
+- `worker-operations`: 配置校验、稳定外部错误字段、安全诊断摘要、有限重试、日志脱敏、单环境配置和部署验证要求。
 
 ### Modified Capabilities
 
@@ -45,6 +52,7 @@ Cloudflare 现有 WAF 告警只能说明异常已经发生，运维和安全人�
 - 新增 `src/` 与 `test/` 下的 Worker 应用、领域模块、外部客户端、分析逻辑和测试夹具。
 - 新增 npm 工具链、单 Worker/Queue 及 Queue producer/consumer bindings 配置。
 - 新增对 Cloudflare GraphQL、兼容 OpenAI 的 LLM API 和企业微信 Webhook 的出站请求。
+- 可观测性修复影响 `src/clients/` 的外部失败分类、`src/pipeline/` 的错误上下文传播、`src/observability/` 的结构化日志与脱敏，以及对应单元和 Workers 集成测试；不改变外部 HTTP API、Queue Message 或基础设施契约。
 - 需要三项 Workers Secrets：`CLOUDFLARE_API_TOKEN`、`LLM_API_KEY`、`WECOM_WEBHOOK_URL`；MVP 不配置入站 Webhook Secret。
 - 未鉴权的公网 Webhook 存在伪造请求和 Queue 滥用风险，MVP 通过严格 Payload 校验、受支持告警类型过滤、请求体大小限制和平台侧流量观测降低风险。
 - MVP 不引入数据库、持久化幂等、DLQ、Workflows、自建服务器或自动 Cloudflare 配置变更。
@@ -64,4 +72,8 @@ Cloudflare 现有 WAF 告警只能说明异常已经发生，运维和安全人�
 - Top IP、Path、Country、ASN 和 Action 比例使用 GraphQL `total_events`，可用相同窗口在 Dashboard 核验或解释差异。
 - AI 结果通过结构与 Evidence 校验；LLM 失败时仍发送包含 Statistics 和 Findings 的降级通知。
 - 企业微信通知展示窗口、身份标识、事实、结论和建议，发送成功后不得由应用主动触发 Queue 重试。
+- 外部 API 最终失败日志至少包含 `external_service`、`error_code`、`failure_kind`、`retryable` 和 `duration_ms`；HTTP 错误包含 `http_status`，GraphQL 采集失败包含 `snapshot_error_code`。
+- 企业微信 timeout、network、运行时可识别的 DNS/TLS/connection、unknown Fetch 异常，以及 HTTP `4xx`/`429`/`5xx`、非法响应和非零 `errcode` 均映射到稳定分类；日志只记录规范化响应类别，不记录原始响应。
+- 当异常名称或消息包含哨兵 Webhook URL、Token、API Key 或 key 时，日志中不得出现任何对应明文，且诊断文本经过长度限制。
+- 企业微信最终失败仍确认 Queue Message，且不重新执行 GraphQL、统计、规则或 AI 分析；LLM 失败仍按既有规则降级。
 - `npm run types`、`npm run typecheck`、`npm run lint`、`npm test`、OpenSpec 严格校验与 Credential 扫描通过。

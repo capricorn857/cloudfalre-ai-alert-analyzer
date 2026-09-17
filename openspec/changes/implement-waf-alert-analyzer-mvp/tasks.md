@@ -103,22 +103,33 @@
 - [x] 9.3 在 Queue 集成测试先模拟 WeCom 成功后的 Logger 异常和通知最终失败，再实现副作用保护；验证成功发送后的非关键错误和 `notification_failed` 均确认消息且不触发 Queue retry。
 - [x] 9.4 在 `test/integration/full-pipeline.test.ts` 使用脱敏 Payload 与 Fetch Mock 完成 Webhook 入队、Queue 消费、GraphQL、LLM 和 WeCom 的全链路测试；验证固定窗口只生成一次、通知字段完整、每个阶段日志可通过相同身份标识关联，并验证通知最终失败不重复 GraphQL 或 AI。
 
-## 10. 安全、运行配置与回归验证
+## 10. 生产验收可观测性修复
 
-- [ ] 10. 完成全量质量、安全、OpenSpec 和代码影响门禁；完成条件为 10.1 至 10.5 全部通过且无未解释的 HIGH/CRITICAL 风险
-- [x] 10.1 补齐 `test/integration/failure-matrix.test.ts`，覆盖 GraphQL、LLM、WeCom 在 timeout/429/5xx/永久错误/非法响应下的组合边界；验证 GraphQL 失败不调用 LLM、LLM 失败仍通知、通知重试不重做分析，WeCom 最终失败被记录并确认，且所有客户端重试次数有限。
-- [x] 10.2 补齐 `test/integration/log-redaction.test.ts`，将唯一哨兵值注入全部 Secrets、Headers、URL 和外部错误体并捕获日志；运行该测试和 `rg` Credential 扫描，验证源码、配置、文档新增内容、夹具和日志输出均不包含真实或哨兵 Secret 明文。
-- [x] 10.3 运行 `npm run types`、`npm run typecheck`、`npm run lint` 和 `npm test`，修复所有失败后再次完整运行；完成条件为四条命令退出码均为 0，且 bindings 生成文件与 `wrangler.jsonc` 一致。
-- [x] 10.4 运行 `openspec validate implement-waf-alert-analyzer-mvp --strict` 和 OpenSpec 工作流校验脚本，核对实现覆盖五份 Specs 的每个 Scenario；完成条件为严格校验通过、无未解决占位符，且 `tasks.md` 仅按真实完成情况勾选。
-- [ ] 10.5 在源码形成后运行 `gitnexus status`，必要时运行 `gitnexus analyze`，最终执行 `gitnexus detect-changes --scope all`；若出现 HIGH/CRITICAL 风险，核对受影响调用方与测试后重新执行类型检查和完整测试。
+- [x] 10. 按 Client、Pipeline、Logger 既有边界完成外部依赖失败观测修复；完成条件为 10.1 至 10.7 全部通过，且不改变固定窗口、重试、LLM 降级或 Queue ack 语义
+- [x] 10.1 在 `test/unit/observability/errors.test.ts` 先增加失败测试，覆盖 timeout、Fetch `TypeError`、network、运行时可识别的 DNS/TLS/connection、unknown、HTTP 状态、`retryable` 和非负有限 `durationMs`，再最小修改 `src/observability/errors.ts` 建立结构化外部失败契约；验证稳定分类不依赖记录原始异常，单文件测试通过。
+- [x] 10.2 在 `test/integration/wecom-client.test.ts` 先增加失败测试，覆盖安全的 Fetch `TypeError` 分类、timeout、HTTP `4xx`/`429`/`5xx`、非法 JSON/Schema、非零 `errcode` 和成功结果，再最小修改 `src/clients/wecom.ts`；验证结果使用规范化 `responseCategory`，HTTP 错误保留 `httpStatus`，且原始响应、`errmsg`、Webhook URL 和 key 不进入错误对象或日志。
+- [x] 10.3 在 `test/integration/cloudflare-graphql-client.test.ts` 和 `test/integration/llm-client.test.ts` 先断言公共失败字段、HTTP 状态、GraphQL `errors` 的服务级分类和 LLM 降级所需上下文，再最小修改 `src/clients/cloudflare-graphql.ts`、`src/clients/llm.ts` 及公共 Client 辅助代码；验证三个外部服务使用同一稳定字段契约且保留既有限重试行为。
+- [x] 10.4 在 `test/unit/analyzers/waf-analyzer.test.ts`、`test/unit/analysis/ai-analyzer.test.ts` 和相关领域测试中先断言 Cloudflare 具体 `errorCode`、结构化失败上下文及 LLM 降级上下文能够无损传播，再最小修改 `src/domain/analysis-result.ts`、AI 结果契约、`src/analyzers/waf-analyzer.ts` 和 `src/analysis/ai-analyzer.ts`；验证 GraphQL 失败不调用 LLM且不启动第二轮查询，LLM 失败仍返回降级结果。
+- [x] 10.5 在 `test/unit/pipeline/process-alert.test.ts` 和 `test/integration/queue-handler.test.ts` 先增加失败测试，断言 `notification_failed` 包含 WeCom 公共失败字段及适用的 `snapshot_error_code`、被确认消费且 GraphQL/LLM 调用次数不增加，再最小修改 `src/pipeline/process-alert.ts` 和必要的窄接口；验证 Pipeline 不解析底层异常文本、不重算统计、不重新格式化或执行上游阶段。
+- [x] 10.6 在 `test/unit/observability/logger.test.ts` 和 `test/integration/log-redaction.test.ts` 先注入含哨兵 Webhook URL、Token、API Key、Authorization 和 key 的异常名称、消息、cause 与 URL，再最小修改 `src/observability/logger.ts` 和安全诊断摘要逻辑；验证已知 Secret 替换、敏感 URL/query 清除、长度限制和递归脱敏全部生效，捕获日志不存在任何哨兵明文。
+- [x] 10.7 扩充 `test/integration/failure-matrix.test.ts` 和必要的全链路测试，覆盖三类外部服务的 timeout、network、HTTP、非法响应与服务级错误组合；验证每个最终失败日志均含 `external_service`、`error_code`、`failure_kind`、`retryable`、`duration_ms` 和适用的专用字段，且 WeCom 最终失败仍 ack、不重跑 GraphQL 或 AI。
 
-## 11. 单环境验收与远端操作门禁
+## 11. 安全、运行配置与回归验证
 
-- [ ] 11. 完成单环境可操作验收证据和远端操作人工门禁；完成条件为 11.1 至 11.4 全部完成，其中任何外部授权未就绪时父任务保持未勾选
-- [x] 11.1 编写 `docs/deployment-verification.md`，列明单一 Worker、Queue、Dashboard vars、Secrets、企微机器人、Cloudflare Token 的人工准备项和回滚步骤；验证文档不含真实 Credential，且不会执行未授权远端操作。
-- [ ] 11.2 在用户明确提供远端操作授权且资源/配置就绪后，执行依赖安装、质量门禁、Wrangler 配置校验和部署；用脱敏告警验证 Route、Queue producer/consumer、固定窗口、外部 Fetch、企微消息和 Workers Logs，未获授权时保持本任务未勾选并记录外部依赖。
-- [ ] 11.3 使用与通知完全相同的 `analysis_window` 对照 Cloudflare Dashboard，记录 Top IP、Path、Country、ASN、Action 和 `total_events` 的一致性或采样差异；验证 Payload `events_count` 仅作参考且不影响系统比例。
-- [x] 11.4 编写 `docs/release-checklist.md`，包含单套资源、Dashboard vars、Secrets、回滚、监控、Credential 检查和人工批准项；验证清单明确远端部署与 Secret 写入必须另获用户授权，本 Change 实施过程中不执行这些操作。
+- [x] 11. 完成全量质量、安全、OpenSpec 和代码影响门禁；完成条件为 11.1 至 11.5 全部通过，无未解释的稳定字段缺失、敏感信息残留或 HIGH/CRITICAL 风险
+- [x] 11.1 重新运行并核对 `test/integration/failure-matrix.test.ts`，覆盖 GraphQL、LLM、WeCom 在 timeout/network/HTTP/永久错误/非法响应下的组合边界；验证 GraphQL 失败不调用 LLM、LLM 失败仍通知、通知重试不重做分析，WeCom 最终失败被记录并确认，且所有客户端重试次数有限。
+- [x] 11.2 重新运行 `test/integration/log-redaction.test.ts`，将唯一哨兵值注入全部 Secrets、Headers、URL、异常链和外部错误体并捕获日志；运行 `rg` Credential 泄漏扫描，验证源码、配置、文档新增内容、夹具和日志输出均不包含真实 Credential，日志输出不包含哨兵 Secret 明文。
+- [x] 11.3 运行 `npm run types`、`npm run typecheck`、`npm run lint` 和 `npm test`，修复所有失败后再次完整运行；完成条件为四条命令退出码均为 0，且 bindings 生成文件与 `wrangler.jsonc` 一致。
+- [x] 11.4 运行 `openspec validate implement-waf-alert-analyzer-mvp --strict` 和 OpenSpec 工作流校验脚本，核对实现覆盖五份 Specs 的每个 Scenario；完成条件为严格校验通过、无未解决占位符，且 `tasks.md` 仅按真实完成情况勾选。
+- [x] 11.5 运行 `gitnexus status`，必要时运行 `gitnexus analyze`，最终执行 `gitnexus detect-changes --scope all`；若出现 HIGH/CRITICAL 风险，核对受影响调用方与测试后重新执行类型检查和完整测试。
+
+## 12. 单环境验收与远端操作门禁
+
+- [ ] 12. 完成单环境可操作验收证据和远端操作人工门禁；完成条件为 12.1 至 12.4 全部完成，其中任何外部授权未就绪时父任务保持未勾选
+- [x] 12.1 编写 `docs/deployment-verification.md`，列明单一 Worker、Queue、Dashboard vars、Secrets、企微机器人、Cloudflare Token 的人工准备项和回滚步骤；验证文档不含真实 Credential，且不会执行未授权远端操作。
+- [ ] 12.2 仅在用户另行明确提供远端操作授权且资源/配置就绪后，执行依赖安装、质量门禁、Wrangler 配置校验和部署；用脱敏告警验证 Route、Queue producer/consumer、固定窗口、外部 Fetch、企微消息和 Workers Logs。本次可观测性修复不得执行部署、Secret 写入、Cloudflare 资源变更或真实企业微信通知测试，未获授权时保持本任务未勾选。
+- [ ] 12.3 仅在用户另行明确授权后，使用与通知完全相同的 `analysis_window` 对照 Cloudflare Dashboard，记录 Top IP、Path、Country、ASN、Action 和 `total_events` 的一致性或采样差异；验证 Payload `events_count` 仅作参考且不影响系统比例。
+- [x] 12.4 编写 `docs/release-checklist.md`，包含单套资源、Dashboard vars、Secrets、回滚、监控、Credential 检查和人工批准项；验证清单明确远端部署与 Secret 写入必须另获用户授权，本 Change 实施过程中不执行这些操作。
 
 ## 验证命令
 

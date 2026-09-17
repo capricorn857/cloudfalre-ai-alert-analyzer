@@ -20,7 +20,7 @@
 - **THEN** 系统拒绝配置而不使用隐式或危险值继续处理
 
 ### Requirement: Structured redacted logging
-系统 SHALL 输出单行 JSON 日志，并按阶段包含可用的 `incident_id`、`correlation_id`、告警类型、资源、告警时间、`analysis_window`、`query_started_at`、`processing_started_at`、`queue_attempt`、外部 API 状态、耗时和 `error_code`。日志 MUST 对 Credential、Authorization Header、Webhook URL secret、过长请求和外部错误响应进行删除、截断或脱敏。
+系统 SHALL 输出单行 JSON 日志，并按阶段包含可用的 `incident_id`、`correlation_id`、告警类型、资源、告警时间、`analysis_window`、`query_started_at`、`processing_started_at`、`queue_attempt` 和外部 API 状态。每个外部依赖最终失败日志 MUST 包含取值为 `cloudflare`、`llm` 或 `wecom` 的 `external_service`，以及稳定的 `error_code`、`failure_kind`、`retryable` 和非负有限数值 `duration_ms`。HTTP 失败 MUST 额外包含 `http_status`；GraphQL 采集失败进入最终处理日志时 MUST 包含 `snapshot_error_code`；企业微信响应只能记录规范化 `response_category`，不得记录原始响应。日志 MUST 对 Credential、Authorization Header、Token、API Key、Webhook URL、Webhook key、过长请求和外部错误响应进行删除、截断或脱敏。
 
 #### Scenario: Successful processing log
 - **WHEN** 一条告警完成通知
@@ -28,14 +28,18 @@
 
 #### Scenario: External API error log
 - **WHEN** 任一外部 API 返回错误
-- **THEN** 日志记录服务名、状态、耗时和错误分类，不记录 Authorization Header 或大型原始响应
+- **THEN** 最终失败日志记录 `external_service`、`error_code`、`failure_kind`、`retryable` 和 `duration_ms`，仅在适用时记录协议专用字段，且不记录 Authorization Header、响应 Header 或大型原始响应
+
+#### Scenario: HTTP dependency failure
+- **WHEN** 任一外部 API 返回非成功 HTTP 状态
+- **THEN** 日志记录 `failure_kind=http` 和实际 `http_status`，且不记录响应 Header 或原始响应体
 
 #### Scenario: Secret-like data in error
-- **WHEN** 上游错误对象或 URL 含有 Secret 值
-- **THEN** 结构化日志输出在写入前移除或掩码该值
+- **WHEN** 上游异常名称、消息、cause 或 URL 含有哨兵 Webhook URL、Token、API Key、Authorization 或 key
+- **THEN** 结构化日志在写入前完成已知 Secret 替换、敏感 URL 和 query 清除及长度限制，输出中不存在对应明文、原始异常对象或原始响应
 
 ### Requirement: Explicit error taxonomy
-系统 MUST 区分输入错误、不可重试错误、可重试错误、AI 降级、通知失败和已成功发送后的非关键错误，并据此决定响应、重试、降级或确认消息。
+系统 MUST 区分输入错误、不可重试错误、可重试错误、AI 降级、通知失败和已成功发送后的非关键错误，并据此决定响应、重试、降级或确认消息。外部依赖失败的 `failure_kind` MUST 为 `timeout`、`network`、`dns`、`tls`、`connection`、`http`、`invalid_response`、`service_error` 或 `unknown` 之一。
 
 #### Scenario: Invalid external input
 - **WHEN** Webhook 或 Queue Message Schema 校验失败
@@ -44,6 +48,14 @@
 #### Scenario: Transient dependency failure
 - **WHEN** 外部依赖发生被分类为临时的错误
 - **THEN** 系统仅在该阶段执行有限客户端重试或按明确 Queue 策略重试
+
+#### Scenario: Fetch transport failure
+- **WHEN** Fetch 抛出 timeout、`TypeError` 或运行时暴露可识别的 DNS、TLS 或连接失败信号
+- **THEN** 系统分别记录 `timeout`、`network` 或可可靠识别的 `dns`、`tls`、`connection`，且在缺少可靠信号时不得猜测更具体类别
+
+#### Scenario: Unknown dependency failure
+- **WHEN** 外部调用抛出无法识别且不属于 HTTP 或协议响应的异常
+- **THEN** 系统稳定回退为 `failure_kind=unknown`，并仍记录 `external_service`、`error_code`、`retryable` 和 `duration_ms`
 
 #### Scenario: AI degradation
 - **WHEN** LLM 失败或输出无效

@@ -89,6 +89,8 @@ export class CloudflareGraphQLClient {
   }
 
   async collectSnapshot(input: SnapshotCollectionInput): Promise<CloudflareSnapshot> {
+    const startedAt = Date.now();
+    const durationMs = () => Date.now() - startedAt;
     const variables = {
       zoneTag: input.zoneTag,
       start: input.analysisWindow.start,
@@ -97,15 +99,27 @@ export class CloudflareGraphQLClient {
     const aggregates = parseGraphQLData(
       AggregateGraphQLResponseSchema,
       await this.request(AGGREGATE_QUERY, variables),
+      durationMs(),
     );
     const samples = parseGraphQLData(
       SamplesGraphQLResponseSchema,
       await this.request(SAMPLES_QUERY, { ...variables, sampleLimit: input.sampleLimit }),
+      durationMs(),
     );
     const zone = aggregates.data.viewer.zones[0];
     const sampleZone = samples.data.viewer.zones[0];
     if (zone === undefined || sampleZone === undefined) {
-      throw new AppError("cloudflare_response_invalid", "cloudflare_response_invalid", false);
+      throw new AppError(
+        "cloudflare_response_invalid",
+        "cloudflare_response_invalid",
+        false,
+        undefined,
+        {
+          externalService: "cloudflare",
+          failureKind: "invalid_response",
+          durationMs: durationMs(),
+        },
+      );
     }
 
     return {
@@ -135,6 +149,8 @@ export class CloudflareGraphQLClient {
   }
 
   private async request(query: string, variables: Record<string, unknown>): Promise<unknown> {
+    const startedAt = Date.now();
+    const durationMs = () => Date.now() - startedAt;
     return retryOperation(async () => {
       let response: Response;
       try {
@@ -148,13 +164,23 @@ export class CloudflareGraphQLClient {
           signal: AbortSignal.timeout(this.timeoutMs),
         });
       } catch (error) {
-        throw classifyUnknownError(error, "cloudflare");
+        throw classifyUnknownError(error, "cloudflare", durationMs());
       }
-      if (!response.ok) throw classifyHttpError("cloudflare", response.status);
+      if (!response.ok) throw classifyHttpError("cloudflare", response.status, durationMs());
       try {
         return await response.json();
       } catch {
-        throw new AppError("cloudflare_response_invalid", "cloudflare_response_invalid", false);
+        throw new AppError(
+          "cloudflare_response_invalid",
+          "cloudflare_response_invalid",
+          false,
+          undefined,
+          {
+            externalService: "cloudflare",
+            failureKind: "invalid_response",
+            durationMs: durationMs(),
+          },
+        );
       }
     }, this.retryOptions);
   }

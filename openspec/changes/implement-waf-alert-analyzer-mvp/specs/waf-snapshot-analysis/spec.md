@@ -50,7 +50,7 @@ Queue Consumer MUST 将消息作为不可信输入进行 Schema 校验，并 MUS
 - **THEN** 系统将调用视为不可用数据且不把未校验响应传入领域分析
 
 ### Requirement: Cloudflare API retry classification
-系统 SHALL 仅对超时、`429` 和 `5xx` 等临时错误执行配置范围内的 1 至 2 次有限退避重试；鉴权、请求或 Schema 等非临时错误 MUST NOT 重试。所有尝试 MUST 复用固定窗口。
+系统 SHALL 仅对超时、`429` 和 `5xx` 等临时错误执行配置范围内的 1 至 2 次有限退避重试；鉴权、请求或 Schema 等非临时错误 MUST NOT 重试。所有尝试 MUST 复用固定窗口。GraphQL 最终失败生成 `collection_failed` 时 MUST 保留 Client 产生的具体稳定 `errorCode` 和结构化失败上下文，不得只保留泛化状态。
 
 #### Scenario: Transient API recovery
 - **WHEN** GraphQL 首次调用发生可重试错误且后续有限重试成功
@@ -58,11 +58,26 @@ Queue Consumer MUST 将消息作为不可信输入进行 Schema 校验，并 MUS
 
 #### Scenario: Permanent API error
 - **WHEN** GraphQL 返回不可重试错误
-- **THEN** 系统停止 GraphQL 客户端重试并生成不含虚构结果的基础异常分析结果
+- **THEN** 系统停止 GraphQL 客户端重试并生成不含虚构结果的基础异常分析结果，`collection_failed.errorCode` 保留鉴权、HTTP、GraphQL 协议或响应 Schema 对应的具体错误码，且不记录原始 GraphQL 响应
 
 #### Scenario: Retry exhaustion
 - **WHEN** 所有有限重试均失败
-- **THEN** 系统记录最终失败并转入基础异常通知路径，不调用 LLM 生成数据结论
+- **THEN** 系统记录最终具体错误码和结构化失败上下文并转入基础异常通知路径，不调用 LLM 生成数据结论，也不启动第二轮 GraphQL 查询
+
+### Requirement: GraphQL failure observability
+Cloudflare GraphQL 最终失败日志 MUST 包含 `external_service=cloudflare`、稳定 `error_code`、`failure_kind`、`retryable` 和非负有限数值 `duration_ms`。HTTP 失败 MUST 额外包含 `http_status`；HTTP `200` 携带 GraphQL `errors` 时 MUST 使用稳定 GraphQL 错误码并视为服务级失败，不得当作成功或普通 HTTP 成功。日志 MUST NOT 包含原始 GraphQL 响应、Authorization Header 或 Token。
+
+#### Scenario: GraphQL errors in HTTP success
+- **WHEN** Cloudflare 返回 HTTP `200` 且响应包含 GraphQL `errors`
+- **THEN** 系统记录稳定 GraphQL `error_code`、`failure_kind=service_error` 和公共外部失败字段，且不记录原始 `errors` 内容
+
+#### Scenario: Snapshot error propagation
+- **WHEN** GraphQL 最终失败并生成 `collection_failed`
+- **THEN** 该结果的具体 `errorCode` 作为 `snapshot_error_code` 进入最终处理日志，不被快照状态或通知错误码覆盖
+
+#### Scenario: Snapshot and notification both fail
+- **WHEN** GraphQL 采集失败后基础异常通知也最终发送失败
+- **THEN** `notification_failed` 日志同时包含企业微信最终失败的公共字段和 GraphQL `snapshot_error_code`，Consumer 确认 Queue Message，且不重新执行 GraphQL 或 AI
 
 ### Requirement: Incident normalization
 系统 MUST 将经过校验的 GraphQL 数据转换为 `Incident`，并 MUST NOT 向后续模块传递 Cloudflare 原始响应。`Incident` SHALL 包含 `incident_id`、Provider、告警类型、资源、告警时间、固定窗口、Payload 事件数参考值、GraphQL 指标、Evidence、受限样本和确定性 Findings 的承载位置。

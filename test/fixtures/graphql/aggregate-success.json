@@ -1,0 +1,21 @@
+{
+  "data": {
+    "viewer": {
+      "zones": [
+        {
+          "total": [{ "count": 400 }],
+          "topIps": [{ "count": 220, "dimensions": { "clientIP": "192.0.2.10" } }],
+          "topPaths": [{ "count": 180, "dimensions": { "clientRequestPath": "/api/login" } }],
+          "topHosts": [{ "count": 400, "dimensions": { "clientRequestHTTPHost": "example.test" } }],
+          "topCountries": [{ "count": 250, "dimensions": { "clientCountryName": "US" } }],
+          "topAsns": [{ "count": 250, "dimensions": { "clientAsn": 64500 } }],
+          "actions": [
+            { "count": 350, "dimensions": { "action": "allow" } },
+            { "count": 50, "dimensions": { "action": "block" } }
+          ],
+          "sources": [{ "count": 400, "dimensions": { "source": "firewallCustom" } }]
+        }
+      ]
+    }
+  }
+}

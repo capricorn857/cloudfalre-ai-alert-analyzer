@@ -49,13 +49,25 @@ const GraphQLErrorEnvelopeSchema = z.object({
   errors: z.array(z.object({ message: z.string() })).min(1),
 });
 
-export function parseGraphQLData<T extends z.ZodType>(schema: T, input: unknown): z.output<T> {
+export function parseGraphQLData<T extends z.ZodType>(
+  schema: T,
+  input: unknown,
+  durationMs = 0,
+): z.output<T> {
   if (GraphQLErrorEnvelopeSchema.safeParse(input).success) {
-    throw new AppError("cloudflare_graphql_errors", "cloudflare_graphql_errors", false);
+    throw new AppError("cloudflare_graphql_errors", "cloudflare_graphql_errors", false, undefined, {
+      externalService: "cloudflare",
+      failureKind: "service_error",
+      durationMs,
+    });
   }
   const result = schema.safeParse(input);
   if (!result.success) {
-    throw new AppError("cloudflare_response_invalid", "cloudflare_response_invalid", false);
+    throw new AppError("cloudflare_response_invalid", "cloudflare_response_invalid", false, undefined, {
+      externalService: "cloudflare",
+      failureKind: "invalid_response",
+      durationMs,
+    });
   }
   return result.data;
 }

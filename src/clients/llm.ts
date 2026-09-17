@@ -69,6 +69,8 @@ export class LLMClient {
   }
 
   async analyze(input: AIAnalysisInput): Promise<AIAnalysis> {
+    const startedAt = Date.now();
+    const durationMs = () => Date.now() - startedAt;
     let response: Response;
     try {
       response = await this.fetchFn(this.endpoint, {
@@ -111,30 +113,57 @@ export class LLMClient {
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {
-      throw classifyUnknownError(error, "llm");
+      throw classifyUnknownError(error, "llm", durationMs());
     }
-    if (!response.ok) throw classifyHttpError("llm", response.status);
+    if (!response.ok) throw classifyHttpError("llm", response.status, durationMs());
 
     let envelope: z.infer<typeof CompletionResponseSchema>;
     try {
       envelope = CompletionResponseSchema.parse(await response.json());
     } catch {
-      throw new AppError("llm_response_invalid", "llm_response_invalid", false);
+      throw new AppError("llm_response_invalid", "llm_response_invalid", false, undefined, {
+        externalService: "llm",
+        failureKind: "invalid_response",
+        durationMs: durationMs(),
+      });
     }
     const content = envelope.choices[0]?.message.content;
     if (content === undefined) {
-      throw new AppError("llm_response_invalid", "llm_response_invalid", false);
+      throw new AppError("llm_response_invalid", "llm_response_invalid", false, undefined, {
+        externalService: "llm",
+        failureKind: "invalid_response",
+        durationMs: durationMs(),
+      });
     }
 
     let unknownOutput: unknown;
     try {
       unknownOutput = JSON.parse(content) as unknown;
     } catch {
-      throw new AppError("llm_output_invalid", "llm_output_invalid", false);
+      throw new AppError("llm_output_invalid", "llm_output_invalid", false, undefined, {
+        externalService: "llm",
+        failureKind: "invalid_response",
+        durationMs: durationMs(),
+      });
     }
     const parsed = LLMOutputSchema.safeParse(unknownOutput);
-    if (!parsed.success) throw new AppError("llm_output_invalid", "llm_output_invalid", false);
-    validateAIAnalysisEvidence(parsed.data, input);
+    if (!parsed.success) {
+      throw new AppError("llm_output_invalid", "llm_output_invalid", false, undefined, {
+        externalService: "llm",
+        failureKind: "invalid_response",
+        durationMs: durationMs(),
+      });
+    }
+    try {
+      validateAIAnalysisEvidence(parsed.data, input);
+    } catch (error) {
+      if (!(error instanceof AppError)) throw error;
+      throw new AppError(error.code, error.message, error.retryable, error.status, {
+        externalService: "llm",
+        failureKind: "invalid_response",
+        durationMs: durationMs(),
+      });
+    }
     return parsed.data;
   }
 }

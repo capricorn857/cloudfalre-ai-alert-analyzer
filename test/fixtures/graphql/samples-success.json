@@ -1,0 +1,23 @@
+{
+  "data": {
+    "viewer": {
+      "zones": [
+        {
+          "samples": [
+            {
+              "datetime": "2026-09-14T09:19:10Z",
+              "action": "allow",
+              "clientIP": "192.0.2.10",
+              "clientCountryName": "US",
+              "clientAsn": 64500,
+              "clientRequestHTTPHost": "example.test",
+              "clientRequestPath": "/api/login",
+              "source": "firewallCustom",
+              "userAgent": "ExampleClient/1.0"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

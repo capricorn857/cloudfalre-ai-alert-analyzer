@@ -65,11 +65,42 @@ Formatter MUST 对列表数量、单字段长度和总消息长度实施确定�
 
 #### Scenario: Permanent send error
 - **WHEN** 企业微信返回不可重试错误
-- **THEN** 系统停止客户端重试、记录通知失败并确认 Queue Message，不重新执行 GraphQL 或 AI 分析
+- **THEN** 系统停止客户端重试、使用公共外部错误字段和规范化 `response_category` 记录通知失败并确认 Queue Message，不重新执行 GraphQL、统计、规则或 AI 分析
 
 #### Scenario: Retry exhaustion
 - **WHEN** 企业微信有限重试全部失败
-- **THEN** 系统记录最终失败、确认 Queue Message，且所有尝试发送完全相同的已格式化消息
+- **THEN** 系统使用公共外部错误字段和规范化 `response_category` 记录最终失败、确认 Queue Message，且所有尝试发送完全相同的已格式化消息，不重新执行 GraphQL、统计、规则或 AI 分析
+
+### Requirement: Classified WeCom outcomes
+系统 MUST 将企业微信调用结果规范化为 `transport_error`、`http_error`、`invalid_response`、`api_error` 或 `success` 之一的 `response_category`。失败结果 MUST 同时提供 `external_service=wecom`、稳定 `error_code`、`failure_kind`、`retryable` 和 `duration_ms`，并 MUST NOT 记录原始响应、`errmsg`、Webhook URL、Webhook key 或完整异常对象。
+
+#### Scenario: Fetch TypeError
+- **WHEN** 企业微信 Fetch 抛出 `TypeError`
+- **THEN** 系统至少记录 `failure_kind=network` 和 `response_category=transport_error`，仅在运行时提供可靠信号时细分为 DNS、TLS 或 connection，且不再统一改写为缺少传输类别的意外错误
+
+#### Scenario: Safe transport diagnostic
+- **WHEN** Fetch 异常名称、消息或 cause 包含哨兵 Webhook URL、Token、API Key 或 key
+- **THEN** 任何可选诊断字段在记录前完成 Secret 替换、敏感 URL 和 query 清除及长度限制，日志中不存在对应明文
+
+#### Scenario: WeCom timeout
+- **WHEN** 企业微信 Fetch 因 timeout 或 abort 失败
+- **THEN** 系统记录 `failure_kind=timeout`、`retryable=true` 和 `response_category=transport_error`，并仅在当前通知阶段执行有限重试
+
+#### Scenario: Permanent HTTP error
+- **WHEN** 企业微信返回除 `429` 以外的 `4xx` 状态
+- **THEN** 系统记录 `failure_kind=http`、实际 `http_status`、`retryable=false` 和 `response_category=http_error`，且不记录响应体或执行客户端重试
+
+#### Scenario: Retryable HTTP error
+- **WHEN** 企业微信返回 `429` 或 `5xx` 状态
+- **THEN** 系统记录 `failure_kind=http`、实际 `http_status`、`retryable=true` 和 `response_category=http_error`，并仅在当前通知阶段执行有限重试
+
+#### Scenario: Invalid WeCom response
+- **WHEN** 企业微信返回 HTTP 成功但响应不是合法 JSON 或不符合预期 Schema
+- **THEN** 系统记录 `failure_kind=invalid_response`、`retryable=false` 和 `response_category=invalid_response`，且不记录原始响应
+
+#### Scenario: Non-zero WeCom errcode
+- **WHEN** 企业微信返回符合 Schema 但 `errcode` 非零的响应
+- **THEN** 系统记录 `failure_kind=service_error`、`retryable=false` 和 `response_category=api_error`，且不记录原始 `errmsg` 或响应对象
 
 ### Requirement: Post-send acknowledgement safety
 一旦企业微信确认发送成功，系统 MUST 将消息视为已完成并 MUST NOT 再抛出会导致 Queue 重试的异常。
@@ -80,4 +111,4 @@ Formatter MUST 对列表数量、单字段长度和总消息长度实施确定�
 
 #### Scenario: Successful delivery
 - **WHEN** 企业微信确认接收消息
-- **THEN** Consumer 确认本次 Queue Message 已完成
+- **THEN** 系统将结果规范化为 `response_category=success`，Consumer 确认本次 Queue Message 已完成，后续日志异常不得触发 Queue retry

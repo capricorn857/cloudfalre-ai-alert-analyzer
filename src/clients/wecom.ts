@@ -34,6 +34,8 @@ export class WeComClient {
   }
 
   async send(message: string): Promise<void> {
+    const startedAt = Date.now();
+    const durationMs = () => Date.now() - startedAt;
     const body = JSON.stringify({ msgtype: "text", text: { content: message } });
     await retryOperation(async () => {
       let response: Response;
@@ -45,17 +47,29 @@ export class WeComClient {
           signal: AbortSignal.timeout(this.timeoutMs),
         });
       } catch (error) {
-        throw classifyUnknownError(error, "wecom");
+        throw classifyUnknownError(error, "wecom", durationMs(), "transport_error");
       }
-      if (!response.ok) throw classifyHttpError("wecom", response.status);
+      if (!response.ok) {
+        throw classifyHttpError("wecom", response.status, durationMs(), "http_error");
+      }
       let parsed: z.infer<typeof WeComResponseSchema>;
       try {
         parsed = WeComResponseSchema.parse(await response.json());
       } catch {
-        throw new AppError("wecom_response_invalid", "wecom_response_invalid", false);
+        throw new AppError("wecom_response_invalid", "wecom_response_invalid", false, undefined, {
+          externalService: "wecom",
+          failureKind: "invalid_response",
+          durationMs: durationMs(),
+          responseCategory: "invalid_response",
+        });
       }
       if (parsed.errcode !== 0) {
-        throw new AppError("wecom_api_error", "wecom_api_error", false);
+        throw new AppError("wecom_api_error", "wecom_api_error", false, undefined, {
+          externalService: "wecom",
+          failureKind: "service_error",
+          durationMs: durationMs(),
+          responseCategory: "api_error",
+        });
       }
     }, this.retryOptions);
   }
