@@ -151,11 +151,3 @@ npm run deploy
 ## 回滚
 
 验证失败时部署上一已验证的 Worker 版本。不要清空 Queue、删除远端资源、扩大在途消息的固定窗口或移动重试窗口；保留脱敏日志和事件身份标识以支持排查。必要时先暂停 Queue consumer，并按[部署验证手册](docs/deployment-verification.md)重新执行端到端核验。
-
-## 相关文档
-
-- [需求文档](docs/Cloudflare%20AI%20告警分析系统需求文档.md)
-- [技术栈文档](docs/Cloudflare%20AI%20告警分析系统技术栈.md)
-- [部署验证手册](docs/deployment-verification.md)
-- [发布检查清单](docs/release-checklist.md)
-- [当前 OpenSpec Change](openspec/changes/implement-waf-alert-analyzer-mvp/proposal.md)
