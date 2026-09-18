@@ -11,6 +11,7 @@ import {
   classifyHttpError,
   classifyUnknownError,
 } from "../observability/errors";
+import { workerFetch } from "./fetch";
 
 const CLOUDFLARE_GRAPHQL_ENDPOINT = "https://api.cloudflare.com/client/v4/graphql";
 
@@ -78,7 +79,7 @@ export class CloudflareGraphQLClient {
 
   constructor(options: CloudflareGraphQLClientOptions) {
     this.token = options.token;
-    this.fetchFn = options.fetchFn ?? fetch;
+    this.fetchFn = options.fetchFn ?? workerFetch;
     this.endpoint = options.endpoint ?? CLOUDFLARE_GRAPHQL_ENDPOINT;
     this.timeoutMs = options.timeoutMs;
     this.retryOptions = {

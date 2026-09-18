@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { retryOperation, type RetryOptions } from "./retry";
 import { AppError, classifyHttpError, classifyUnknownError } from "../observability/errors";
+import { workerFetch } from "./fetch";
 
 const WeComResponseSchema = z.object({
   errcode: z.number().int(),
@@ -24,7 +25,7 @@ export class WeComClient {
 
   constructor(options: WeComClientOptions) {
     this.webhookUrl = options.webhookUrl;
-    this.fetchFn = options.fetchFn ?? fetch;
+    this.fetchFn = options.fetchFn ?? workerFetch;
     this.timeoutMs = options.timeoutMs;
     this.retryOptions = {
       retries: options.retries,

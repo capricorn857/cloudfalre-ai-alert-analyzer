@@ -3,6 +3,7 @@ import { z } from "zod";
 import { validateAIAnalysisEvidence, type AIAnalysisInput } from "../analysis/evidence";
 import { AIAnalysisSchema, type AIAnalysis } from "../domain/ai-analysis";
 import { AppError, classifyHttpError, classifyUnknownError } from "../observability/errors";
+import { workerFetch } from "./fetch";
 
 const LLMOutputSchema = z
   .object({
@@ -63,7 +64,7 @@ export class LLMClient {
     this.endpoint = `${options.baseUrl.replace(/\/$/u, "")}/chat/completions`;
     this.model = options.model;
     this.apiKey = options.apiKey;
-    this.fetchFn = options.fetchFn ?? fetch;
+    this.fetchFn = options.fetchFn ?? workerFetch;
     this.timeoutMs = options.timeoutMs;
     this.maxOutputTokens = options.maxOutputTokens;
   }
@@ -98,6 +99,28 @@ export class LLMClient {
                   "evidence",
                   "recommendations",
                 ],
+                properties: {
+                  risk_level: {
+                    type: "string",
+                    enum: ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+                  },
+                  attack_type: {
+                    type: "string",
+                    enum: [
+                      "Scanning",
+                      "Brute Force",
+                      "Credential Stuffing",
+                      "API Abuse",
+                      "Bot",
+                      "Vulnerability Scanning",
+                      "Unknown",
+                    ],
+                  },
+                  confidence: { type: "number" },
+                  summary: { type: "string" },
+                  evidence: { type: "array", items: { type: "string" } },
+                  recommendations: { type: "array", items: { type: "string" } },
+                },
               },
             },
           },

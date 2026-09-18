@@ -2,6 +2,17 @@ import { z } from "zod";
 
 import { UtcDateTimeSchema, ZonedDateTimeSchema } from "./time";
 
+const CLOUDFLARE_WEBHOOK_TEST_MARKER =
+  "This is a test message sent from https://cloudflare.com.";
+
+export const CloudflareWebhookTestPayloadSchema = z.object({
+  text: z.string().refine((value) => value.includes(CLOUDFLARE_WEBHOOK_TEST_MARKER)),
+});
+
+export function isCloudflareWebhookTestPayload(payload: unknown): boolean {
+  return CloudflareWebhookTestPayloadSchema.safeParse(payload).success;
+}
+
 const EventCountSchema = z
   .union([z.number().int().nonnegative(), z.string().regex(/^\d+$/u)])
   .transform((value) => Number(value));

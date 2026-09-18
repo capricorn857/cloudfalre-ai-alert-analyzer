@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LLMClient } from "../../src/clients/llm";
 import { AppError } from "../../src/observability/errors";
@@ -14,6 +14,10 @@ const statistics = calculateStatistics(incident);
 const findings = evaluateRules(statistics, rulesConfig);
 const input = { incident, statistics, findings };
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 function completion(content: string): Response {
   return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
     headers: { "content-type": "application/json" },
@@ -27,6 +31,29 @@ function requestBody(fetchFn: ReturnType<typeof vi.fn<typeof fetch>>) {
 }
 
 describe("LLMClient", () => {
+  it("calls the default Workers fetch without an invalid receiver", async () => {
+    const runtimeFetch = vi.fn(function (this: unknown): Promise<Response> {
+      if (this !== undefined) {
+        throw new TypeError("Illegal invocation: function called with incorrect this reference");
+      }
+      return Promise.resolve(completion(JSON.stringify(validOutput)));
+    });
+    vi.stubGlobal("fetch", runtimeFetch);
+    const client = new LLMClient({
+      baseUrl: "https://llm.example.test/v1",
+      model: "test-model",
+      apiKey: "llm-test-secret",
+      timeoutMs: 1000,
+      maxOutputTokens: 800,
+    });
+
+    await expect(client.analyze(input)).resolves.toMatchObject({
+      riskLevel: "HIGH",
+      attackType: "Brute Force",
+    });
+    expect(runtimeFetch).toHaveBeenCalledOnce();
+  });
+
   it("sends only bounded domain input and returns validated AIAnalysis", async () => {
     const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(completion(JSON.stringify(validOutput)));
     const client = new LLMClient({
@@ -44,7 +71,54 @@ describe("LLMClient", () => {
     });
     expect(fetchFn.mock.calls[0]?.[0]).toBe("https://llm.example.test/v1/chat/completions");
     const body = requestBody(fetchFn);
-    expect(body).toMatchObject({ model: "test-model", max_completion_tokens: 800 });
+    expect(body).toMatchObject({
+      model: "test-model",
+      max_completion_tokens: 800,
+      response_format: {
+        type: "json_schema",
+        json_schema: {
+          name: "cloudflare_security_analysis",
+          strict: true,
+          schema: {
+            type: "object",
+            additionalProperties: false,
+            required: [
+              "risk_level",
+              "attack_type",
+              "confidence",
+              "summary",
+              "evidence",
+              "recommendations",
+            ],
+            properties: {
+              risk_level: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+              attack_type: {
+                type: "string",
+                enum: [
+                  "Scanning",
+                  "Brute Force",
+                  "Credential Stuffing",
+                  "API Abuse",
+                  "Bot",
+                  "Vulnerability Scanning",
+                  "Unknown",
+                ],
+              },
+              confidence: { type: "number" },
+              summary: { type: "string" },
+              evidence: {
+                type: "array",
+                items: { type: "string" },
+              },
+              recommendations: {
+                type: "array",
+                items: { type: "string" },
+              },
+            },
+          },
+        },
+      },
+    });
     const serialized = JSON.stringify(body);
     expect(serialized).not.toContain("raw_payload");
     expect(serialized).not.toContain("llm-test-secret");

@@ -2,9 +2,9 @@
 
 ## Context
 
-当前 MVP 已完成 Worker 工程和主要业务链路。生产验收确认 Webhook、Queue producer、Consumer 和固定窗口正常，但发现两条可观测性缺口：WeCom Fetch 异常经过通用分类后统一成为 `wecom_unexpected`，底层失败类型丢失；最终 `notification_failed` 日志只记录快照状态，没有传播 GraphQL `collection_failed` 的具体 `errorCode`。现有 Logger 能递归脱敏和截断，但 Pipeline 直接传入原始 `Error`，诊断字段尚未形成稳定契约。
+当前 MVP 已完成 Worker 工程和主要业务链路。生产验收确认 Webhook、Queue producer、Consumer 和固定窗口正常，但发现两条可观测性缺口：WeCom Fetch 异常经过通用分类后统一成为 `wecom_unexpected`，底层失败类型丢失；最终 `notification_failed` 日志只记录快照状态，没有传播 GraphQL `collection_failed` 的具体 `errorCode`。现有 Logger 能递归脱敏和截断，但 Pipeline 直接传入原始 `Error`，诊断字段尚未形成稳定契约。此外，Cloudflare Generic Webhook 创建目的地时发送的官方测试 Payload 只有 `text`，当前入口直接用真实 WAF Schema 校验并返回 `400`，导致 “Save and Test” 失败。
 
-本次修订只增强三类外部 HTTP 客户端、分析结果、Pipeline 和 Logger 之间的失败上下文，不改变既有业务处理流程。目标行为仍由本 Change 的五份 delta Specs 定义，并遵守 Cloudflare Workers 的运行时与资源约束。
+本次修订增强三类外部 HTTP 客户端、分析结果、Pipeline 和 Logger 之间的失败上下文，并在 Webhook 入口增加一个无副作用的官方测试握手分支；真实 WAF 告警处理流程保持不变。目标行为仍由本 Change 的五份 delta Specs 定义，并遵守 Cloudflare Workers 的运行时与资源约束。
 
 关键约束如下：
 
@@ -25,6 +25,7 @@
 - 用可关联、脱敏的 JSON 日志支持单环境验收和故障定位。
 - 让外部依赖最终失败以稳定字段跨越 Client、Analyzer/AI 和 Pipeline 边界，并能查询传输、HTTP、协议和服务级失败。
 - 在最终通知失败日志中保留 WeCom 失败上下文和已有 GraphQL 快照错误码，同时不重新执行任何上游阶段。
+- 让 Cloudflare 官方 Generic Webhook 测试请求在真实 WAF 校验前通过独立 Schema 被识别并无副作用地返回 `200`。
 
 **Non-Goals:**
 
@@ -33,6 +34,7 @@
 - 抽象通用工作流引擎或为尚未支持的告警类型实现 Analyzer。
 - 引入代理、中转服务、持久化组件、新 SDK，或改变 Queue Message、固定窗口、有限重试和至少一次投递语义。
 - 在本 Change 中创建远端 Cloudflare 资源、写入真实 Secrets 或执行远端部署。
+- 放宽真实 WAF Payload 校验、接受任意文本请求或实现 `cf-webhook-auth`。
 
 ## 总体方案
 
@@ -41,6 +43,9 @@
 ```text
 POST /api/v1/alerts/cloudflare
   -> route/body/schema validation
+  -> official webhook test schema?
+     -> yes: 200 {"message":"Webhook test accepted"}; stop
+     -> no: continue real WAF validation
   -> CloudflareAlertPayload -> Alert
   -> fix webhook_received_at/query_started_at/analysis_window
   -> Queue.send(message, delaySeconds)
@@ -82,6 +87,7 @@ Queue<QueueMessage> (max_batch_size = 1)
 领域契约按文件拆分，并用 Zod 推导 TypeScript 类型：
 
 - `CloudflareAlertPayloadSchema`：仅在 Webhook 边界保留 Cloudflare 字段名。
+- `CloudflareWebhookTestPayloadSchema`：独立校验字符串 `text`，并要求其包含完整官方测试标记；不与真实 WAF Payload 组成宽松联合 Schema。
 - `AlertSchema`：内部 camelCase 命名，保留原始事件数参考值，但不保留无限制原始 Payload。
 - `AnalysisWindowSchema`：UTC `start` 与 `end`，验证 `start <= end`。
 - `QueueMessageSchema`：`alert`、`incidentId`、`correlationId`、`webhookReceivedAt`、`queryStartedAt`、`analysisWindow` 和计算窗口使用的配置快照。
@@ -90,6 +96,12 @@ Queue<QueueMessage> (max_batch_size = 1)
 - `EnvSchema` 与 `BusinessConfigSchema`：将字符串 vars 解析成有范围约束的只读配置。
 
 `incident_id` 优先使用稳定的 `alert_correlation_id`；若外部值不满足内部标识约束，则在入队前生成并固化新的 UUID。`correlation_id` 始终保留外部关联值。两者在 Queue 重试中均不改变。
+
+### Webhook 测试握手
+
+入口完成路由、方法、体积限制、请求体读取和 JSON 解析后，先调用由 `CloudflareWebhookTestPayloadSchema` 支持的小型纯函数识别官方测试请求。只有 `text` 包含完整官方普通 URL 标记 `This is a test message sent from https://cloudflare.com.` 时才返回 `200` 与 `{"message":"Webhook test accepted"}`；Markdown 链接变体不属于官方契约。该分支在 `parseEnv`、时钟读取、`buildQueueMessage` 和 `Queue.send` 之前结束，因此不会计算窗口或触发任何出站请求。
+
+不满足测试 Schema 的输入继续进入原有 `CloudflareAlertPayloadSchema`。因此任意 `{"text":"hello"}`、带普通 `text` 但缺少真实告警字段的对象以及畸形 JSON 仍按输入错误返回 `400`；有效真实 WAF 告警继续只在 Queue 写入成功后返回 `202`。
 
 ### 外部失败契约
 
@@ -212,6 +224,13 @@ Client 负责将 Fetch、HTTP 和响应校验失败转换为结构化外部失�
 
 Cloudflare `collection_failed` 结果携带其结构化失败；LLM 失败的 `AIUnavailable` 可携带结构化失败但仍执行规则降级；WeCom 最终失败以结构化异常到达 Pipeline。Pipeline 为每个最终外部失败记录稳定字段，并在 `notification_failed` 中额外写入 `snapshot_error_code`（仅当快照为 `collection_failed`）。任何一条日志都不包含原始响应、Headers、完整 URL 或原始 `Error` 对象。
 
+### Decision 9: 独立测试 Schema 在真实告警校验前短路
+
+选择独立 Zod Schema 和纯识别函数，而不是扩展 `CloudflareAlertPayloadSchema` 的联合类型或在 Handler 中接受任意 `text`。
+
+- 优点：官方测试契约与真实告警契约隔离，真实 WAF 字段仍保持严格必填；纯函数可直接测试，副作用边界明确。
+- 放弃方案：将测试 Payload 加入真实告警联合类型会扩大后续类型分支并增加误用机会；内联字符串判断不利于边界契约复用；任意 `text` 成功会扩大未鉴权公网入口的滥用面。
+
 ## 错误处理
 
 错误类型分为：
@@ -251,12 +270,14 @@ Queue `max_batch_size = 1`，使确认只对应一个事件。无效 Queue Messa
 - 回滚期间已经入队的 v1 消息必须由回滚版本继续支持；若未来破坏消息契约，应先部署双读 Consumer，再升级 producer。
 - 企业微信成功是不可逆外部副作用。成功返回后任何本地非关键失败不得升级为 Queue retry。
 - 新增日志字段和内部失败上下文为向后兼容的增量，不修改 Webhook、Queue Message 或外部服务请求契约，也不需要数据迁移。
+- 新增官方测试握手是 Webhook 的向后兼容响应分支；真实 WAF、Queue Message、固定窗口及 Consumer 契约均不变，回滚只需恢复上一 Worker 版本。
 
 ## 测试计划
 
 ### 单元测试
 
 - Payload、Queue Message、配置、GraphQL 响应和 AI 输出 Schema。
+- 官方 Webhook 测试 Schema 接受包含普通 `https://cloudflare.com` URL 的完整官方标记，并拒绝任意文本与 Markdown 链接变体。
 - 窗口计算、UTC 归一和 Consumer 窗口一致性校验。
 - Normalizer、零分母与各比例 Statistics、阈值边界 Rules。
 - AI Evidence 交叉校验、建议限制和降级状态。
@@ -268,6 +289,7 @@ Queue `max_batch_size = 1`，使确认只对应一个事件。无效 Queue Messa
 ### Workers 集成测试
 
 - 路由、方法、请求体大小、无效 Payload、受支持/不支持类型、Queue 入队失败和 `202` 时序。
+- 官方测试 Payload 返回精确 `200` 响应，Queue 未调用且无 GraphQL、LLM、企业微信出站请求；普通文本和带 `text` 的畸形真实告警仍返回 `400`。
 - Queue 延迟参数、固定消息窗口、晚到/重试消费不漂移。
 - Fetch Mock 覆盖 GraphQL HTTP 200 + `errors`、timeout、429、5xx、永久错误和重试耗尽。
 - LLM 成功、协议错误、Schema 错误、Evidence 越界及规则降级通知。
@@ -286,6 +308,7 @@ Queue `max_batch_size = 1`，使确认只对应一个事件。无效 Queue Messa
 - [Queue 至少一次可能产生重复通知] -> 固定 `incident_id`/`correlation_id` 并在通知显著展示；严格去重另立 Change。
 - [Security Analytics 存在采样或聚合延迟] -> 固定延迟后做一次快照、展示窗口和口径，不声称覆盖完整事件生命周期。
 - [未鉴权公网 Webhook 可被伪造或滥用] -> 严格 Schema、受支持类型、体积限制、快速拒绝和平台流量观测；入站鉴权作为后续独立安全 Change。
+- [公开测试标记可被仿造] -> 测试分支只返回固定成功响应且没有 Queue、窗口或出站副作用；`cf-webhook-auth` 明确留待独立安全 Change。
 - [多个 GraphQL 请求可能部分成功] -> 只有满足 Incident 最小数据契约才进入统计；否则发送采集失败通知，不拼接不可解释的部分结果。
 - [AI Evidence 语义校验无法证明所有自然语言均正确] -> 限制字段与长度、验证关键实体和值、Formatter 分隔事实和推断；人工仍需根据 Evidence 决策。
 - [Workers 执行预算限制短暂退避] -> 严格限制尝试次数、请求超时、样本和输出大小；在已部署 Worker 记录各阶段耗时。
@@ -299,5 +322,5 @@ Queue `max_batch_size = 1`，使确认只对应一个事件。无效 Queue Messa
 2. 完成纯领域契约、配置、窗口和分析模块及单元测试。
 3. 完成 Clients、Pipeline、Handlers 和 Workers 集成测试。
 4. 运行 `npm run types`、`npm run typecheck`、`npm run lint`、`npm test` 和 Credential 扫描。
-5. 本次可观测性修复只在重新批准 artifacts 后实施和验证，不执行部署、Secret 写入、Cloudflare 资源变更或真实企业微信通知测试。
+5. 本次可观测性修复和 Webhook 测试握手只在重新批准 artifacts 后实施和验证，不执行部署、Secret 写入、Cloudflare 资源变更或真实企业微信通知测试。
 6. 后续如获得单独生产授权，再按发布检查清单部署；异常时通过部署上一已验证版本回滚，Queue Message 契约无需迁移。

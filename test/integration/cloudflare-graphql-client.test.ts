@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CloudflareGraphQLClient } from "../../src/clients/cloudflare-graphql";
 import { AppError } from "../../src/observability/errors";
@@ -16,6 +16,10 @@ const input = {
   sampleLimit: 50,
 };
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -29,6 +33,28 @@ function bodyAsString(body: BodyInit | null | undefined): string {
 }
 
 describe("CloudflareGraphQLClient", () => {
+  it("calls the default Workers fetch without an invalid receiver", async () => {
+    let requestCount = 0;
+    const runtimeFetch = vi.fn(function (this: unknown): Promise<Response> {
+      if (this !== undefined) {
+        throw new TypeError("Illegal invocation: function called with incorrect this reference");
+      }
+      requestCount += 1;
+      return Promise.resolve(
+        jsonResponse(requestCount === 1 ? aggregateSuccess : samplesSuccess),
+      );
+    });
+    vi.stubGlobal("fetch", runtimeFetch);
+    const client = new CloudflareGraphQLClient({
+      token: "cf-test-secret",
+      timeoutMs: 1000,
+      retries: 0,
+    });
+
+    await expect(client.collectSnapshot(input)).resolves.toMatchObject({ totalEvents: 400 });
+    expect(runtimeFetch).toHaveBeenCalledTimes(2);
+  });
+
   it("collects aggregates and samples with one immutable window", async () => {
     const fetchFn = vi
       .fn<typeof fetch>()
