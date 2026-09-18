@@ -1,7 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { WeComClient } from "../../src/clients/wecom";
 import { AppError } from "../../src/observability/errors";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function result(errcode = 0, status = 200): Response {
   return new Response(JSON.stringify({ errcode, errmsg: errcode === 0 ? "ok" : "failed" }), {
@@ -16,6 +20,24 @@ function bodyAsString(body: BodyInit | null | undefined): string {
 }
 
 describe("WeComClient", () => {
+  it("calls the default Workers fetch without an invalid receiver", async () => {
+    const runtimeFetch = vi.fn(function (this: unknown): Promise<Response> {
+      if (this !== undefined) {
+        throw new TypeError("Illegal invocation: function called with incorrect this reference");
+      }
+      return Promise.resolve(result());
+    });
+    vi.stubGlobal("fetch", runtimeFetch);
+    const client = new WeComClient({
+      webhookUrl: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test-only",
+      timeoutMs: 1000,
+      retries: 0,
+    });
+
+    await expect(client.send("formatted-message")).resolves.toBeUndefined();
+    expect(runtimeFetch).toHaveBeenCalledOnce();
+  });
+
   it("sends an already formatted text message", async () => {
     const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(result());
     const client = new WeComClient({

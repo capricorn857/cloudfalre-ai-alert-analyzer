@@ -14,6 +14,7 @@
 - 固定窗口：`query_started_at = webhook_received_at + settle_seconds`，`start = alert_time - before_minutes`，`end = query_started_at`；默认分别为 60 秒和 30 分钟。
 - Queue：`max_batch_size = 1`，至少一次投递，技术重试复用原消息、身份标识和窗口，不承诺 exactly-once。
 - 边界：Webhook、Queue Message、vars、外部 API 响应和 LLM 输出均须经过 Zod；外部输入类型为 `unknown`。
+- 测试握手：仅在 JSON 解析后以独立 Schema 匹配 Cloudflare 完整官方测试标记；该分支不得解析 env、读取时钟、计算窗口、入队或调用任何下游服务。
 - 统计：比例只使用 GraphQL `total_events`；Payload `events_count` 仅作参考；零分母必须显式表示数据不足。
 - AI：只接收 Incident、Statistics、Findings；失败降级且不得触发整条消息重放；Formatter 不接触未校验原文。
 - 安全：Secret 仅通过 Workers Secrets；日志、代码、文档和夹具不得含真实 Credential。
@@ -22,7 +23,7 @@
 
 ## 文件与接口约定
 
-- `src/domain/alert.ts` 导出 `CloudflareAlertPayloadSchema`、`AlertSchema`、`CloudflareAlertPayload`、`Alert`。
+- `src/domain/alert.ts` 导出 `CloudflareWebhookTestPayloadSchema`、`isCloudflareWebhookTestPayload`、`CloudflareAlertPayloadSchema`、`AlertSchema`、`CloudflareAlertPayload`、`Alert`。
 - `src/domain/queue-message.ts` 导出 `AnalysisWindowSchema`、`QueueMessageSchema`、`AnalysisWindow`、`QueueMessage`，消息版本固定为 `schemaVersion: 1`。
 - `src/domain/incident.ts`、`statistics.ts`、`finding.ts`、`ai-analysis.ts` 分别导出同名 Schema 与推导类型。
 - `src/pipeline/window.ts` 导出 `buildQueueMessage(payload, config, now): QueueMessage` 与 `validateFixedWindow(message): void`。
@@ -130,6 +131,14 @@
 - [ ] 12.2 仅在用户另行明确提供远端操作授权且资源/配置就绪后，执行依赖安装、质量门禁、Wrangler 配置校验和部署；用脱敏告警验证 Route、Queue producer/consumer、固定窗口、外部 Fetch、企微消息和 Workers Logs。本次可观测性修复不得执行部署、Secret 写入、Cloudflare 资源变更或真实企业微信通知测试，未获授权时保持本任务未勾选。
 - [ ] 12.3 仅在用户另行明确授权后，使用与通知完全相同的 `analysis_window` 对照 Cloudflare Dashboard，记录 Top IP、Path、Country、ASN、Action 和 `total_events` 的一致性或采样差异；验证 Payload `events_count` 仅作参考且不影响系统比例。
 - [x] 12.4 编写 `docs/release-checklist.md`，包含单套资源、Dashboard vars、Secrets、回滚、监控、Credential 检查和人工批准项；验证清单明确远端部署与 Secret 写入必须另获用户授权，本 Change 实施过程中不执行这些操作。
+
+## 13. Cloudflare Generic Webhook 测试握手修复
+
+- [x] 13. 采用 TDD 完成官方测试握手的无副作用接入；完成条件为 13.1 至 13.4 全部通过，且真实 WAF 严格校验、固定窗口和 Queue 行为不变
+- [x] 13.1 在 `test/unit/domain/alert.test.ts` 先增加失败测试，断言完整官方测试标记通过、任意 `{"text":"hello"}` 和不完整标记失败；再在 `src/domain/alert.ts` 最小实现独立 `CloudflareWebhookTestPayloadSchema` 与纯函数 `isCloudflareWebhookTestPayload`。
+- [x] 13.2 在 `test/integration/cloudflare-alert-route.test.ts` 先增加失败测试，断言官方测试 Payload 返回 `200`、响应精确为 `{"message":"Webhook test accepted"}`、`Queue.send` 未调用且全局 Fetch 无 GraphQL/LLM/企业微信出站请求；确认测试在实现前因当前 `400` 行为失败。
+- [x] 13.3 在同一集成测试先覆盖任意 `{"text":"hello"}`、畸形 JSON、带 `text` 但缺少必需字段的畸形真实告警仍返回 `400`，并保留原有有效告警、无效告警和 Queue 失败断言；再最小修改 `src/api/cloudflare-alert.ts`，仅在 JSON 解析后、真实 WAF Schema 前加入无副作用短路响应。
+- [x] 13.4 运行 `npm run typecheck`、`npm run lint`、`npm test`、`openspec validate implement-waf-alert-analyzer-mvp --strict`、OpenSpec 工作流校验脚本和 `gitnexus detect-changes --scope all`；检查本次 diff 不含 Credential，确认未运行部署、未修改 Cloudflare 资源且未写入 Secret后，再按真实结果勾选 13 与子任务。
 
 ## 验证命令
 

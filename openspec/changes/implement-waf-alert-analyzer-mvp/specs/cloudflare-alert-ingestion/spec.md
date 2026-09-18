@@ -42,6 +42,22 @@
 - **WHEN** 请求体超过配置的大小上限
 - **THEN** 系统返回 `413 Payload Too Large` 且不解析或写入 Queue
 
+### Requirement: Cloudflare Generic Webhook test handshake
+系统 MUST 在请求体完成 JSON 解析后、真实 WAF Payload Schema 校验前，使用独立 Schema 识别 Cloudflare Generic Webhook 官方测试请求。测试请求的 `text` MUST 包含完整标记 `This is a test message sent from [https://cloudflare.com](https://cloudflare.com).`；系统 MUST NOT 将任意包含 `text` 的对象视为测试成功。
+
+#### Scenario: Official Cloudflare webhook test is accepted
+- **WHEN** 合法 JSON 的 `text` 包含完整 Cloudflare 官方测试标记
+- **THEN** 系统返回 `200 OK` 和精确 JSON 响应 `{"message":"Webhook test accepted"}`
+- **AND** 系统不写入 Queue、不计算 `query_started_at` 或 `analysis_window`，也不调用 Cloudflare GraphQL、LLM 或企业微信
+
+#### Scenario: Arbitrary text is rejected
+- **WHEN** 请求体为 `{"text":"hello"}` 或其他不包含完整官方测试标记的文本对象
+- **THEN** 系统返回 `400 Bad Request` 且不写入 Queue 或调用任何下游服务
+
+#### Scenario: Text does not bypass malformed alert validation
+- **WHEN** Payload 带有 `text` 但不满足官方测试标记，并且缺少真实 WAF 告警必需字段
+- **THEN** 系统返回 `400 Bad Request` 且不写入 Queue 或调用任何下游服务
+
 ### Requirement: Supported alert mapping
 系统 SHALL 仅将 `alert_type = clickhouse_alert_fw_anomaly` 的告警映射为内部 `Alert.alertType = waf_attack`。MVP 不支持的告警类型 MUST NOT 进入分析 Queue。
 

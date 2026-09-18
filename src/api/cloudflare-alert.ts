@@ -1,6 +1,9 @@
 import { parseEnv } from "../config/env";
 import type { Clock } from "../clients/contracts";
-import { CloudflareAlertPayloadSchema } from "../domain/alert";
+import {
+  CloudflareAlertPayloadSchema,
+  isCloudflareWebhookTestPayload,
+} from "../domain/alert";
 import { mapCloudflareAlert } from "../pipeline/dispatcher";
 import { buildQueueMessage } from "../pipeline/window";
 
@@ -46,6 +49,10 @@ export async function handleCloudflareAlert(
     unknownPayload = JSON.parse(body) as unknown;
   } catch {
     return response(400, "Invalid JSON");
+  }
+
+  if (isCloudflareWebhookTestPayload(unknownPayload)) {
+    return response(200, "Webhook test accepted");
   }
 
   const payloadResult = CloudflareAlertPayloadSchema.safeParse(unknownPayload);
