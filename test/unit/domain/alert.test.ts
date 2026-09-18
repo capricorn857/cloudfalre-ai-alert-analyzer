@@ -8,6 +8,10 @@ import {
 } from "../../../src/domain/alert";
 
 const officialWebhookTestPayload = {
+  text: "Hello World! This is a test message sent from https://cloudflare.com. If you can see this, your webhook is configured properly.",
+};
+
+const markdownLinkWebhookTestPayload = {
   text: "Hello World! This is a test message sent from [https://cloudflare.com](https://cloudflare.com). If you can see this, your webhook is configured properly.",
 };
 
@@ -16,11 +20,7 @@ describe("Cloudflare webhook test payload", () => {
     expect(CloudflareWebhookTestPayloadSchema.safeParse(officialWebhookTestPayload).success).toBe(true);
     expect(isCloudflareWebhookTestPayload(officialWebhookTestPayload)).toBe(true);
     expect(isCloudflareWebhookTestPayload({ text: "hello" })).toBe(false);
-    expect(
-      isCloudflareWebhookTestPayload({
-        text: "This is a test message sent from https://cloudflare.com.",
-      }),
-    ).toBe(false);
+    expect(isCloudflareWebhookTestPayload(markdownLinkWebhookTestPayload)).toBe(false);
   });
 });
 

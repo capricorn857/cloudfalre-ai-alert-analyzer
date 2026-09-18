@@ -43,7 +43,7 @@
 - **THEN** 系统返回 `413 Payload Too Large` 且不解析或写入 Queue
 
 ### Requirement: Cloudflare Generic Webhook test handshake
-系统 MUST 在请求体完成 JSON 解析后、真实 WAF Payload Schema 校验前，使用独立 Schema 识别 Cloudflare Generic Webhook 官方测试请求。测试请求的 `text` MUST 包含完整标记 `This is a test message sent from [https://cloudflare.com](https://cloudflare.com).`；系统 MUST NOT 将任意包含 `text` 的对象视为测试成功。
+系统 MUST 在请求体完成 JSON 解析后、真实 WAF Payload Schema 校验前，使用独立 Schema 识别 Cloudflare Generic Webhook 官方测试请求。测试请求的 `text` MUST 包含完整标记 `This is a test message sent from https://cloudflare.com.`；系统 MUST NOT 将任意包含 `text` 的对象或 Markdown 链接变体视为测试成功。
 
 #### Scenario: Official Cloudflare webhook test is accepted
 - **WHEN** 合法 JSON 的 `text` 包含完整 Cloudflare 官方测试标记
@@ -52,6 +52,10 @@
 
 #### Scenario: Arbitrary text is rejected
 - **WHEN** 请求体为 `{"text":"hello"}` 或其他不包含完整官方测试标记的文本对象
+- **THEN** 系统返回 `400 Bad Request` 且不写入 Queue 或调用任何下游服务
+
+#### Scenario: Markdown link variant is rejected
+- **WHEN** `text` 仅包含 `This is a test message sent from [https://cloudflare.com](https://cloudflare.com).` 而不包含官方普通 URL 标记
 - **THEN** 系统返回 `400 Bad Request` 且不写入 Queue 或调用任何下游服务
 
 #### Scenario: Text does not bypass malformed alert validation

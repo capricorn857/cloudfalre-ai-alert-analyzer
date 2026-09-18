@@ -67,7 +67,7 @@ Cloudflare Generic Webhook 在创建目的地时会向同一路由发送仅含�
 - Cloudflare Queue 为至少一次投递，极端情况下可能重复通知；MVP 通过稳定的 `incident_id` 和 `correlation_id` 支持人工识别，不承诺 exactly-once。
 - Security Analytics 可能存在采样或聚合延迟；系统固定延迟后只执行一次快照，并展示分析窗口与统计口径。
 - 公网 Webhook 在 MVP 不配置入站 Secret；通过严格 Schema、请求体限制、类型过滤和平台流量观测降低滥用风险。
-- 测试握手分支只接受 `text` 包含完整官方标记 `This is a test message sent from [https://cloudflare.com](https://cloudflare.com).` 的合法 JSON；其他任意文本、畸形 JSON 和缺少真实告警字段的 Payload 仍返回 `400`。
+- 测试握手分支只接受 `text` 包含完整官方标记 `This is a test message sent from https://cloudflare.com.` 的合法 JSON；其他任意文本、Markdown 链接变体、畸形 JSON 和缺少真实告警字段的 Payload 仍返回 `400`。
 - 首次实现没有历史应用数据迁移；Queue Message 使用显式版本，未来破坏性变更需保持 Consumer 兼容。
 - 单环境配置降低部署复杂度，但不提供 staging 隔离；所有远端变更必须依赖发布前检查、人工授权和可回滚版本控制。
 

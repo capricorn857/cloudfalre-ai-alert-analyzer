@@ -99,7 +99,7 @@ Queue<QueueMessage> (max_batch_size = 1)
 
 ### Webhook 测试握手
 
-入口完成路由、方法、体积限制、请求体读取和 JSON 解析后，先调用由 `CloudflareWebhookTestPayloadSchema` 支持的小型纯函数识别官方测试请求。只有 `text` 包含完整标记 `This is a test message sent from [https://cloudflare.com](https://cloudflare.com).` 时才返回 `200` 与 `{"message":"Webhook test accepted"}`。该分支在 `parseEnv`、时钟读取、`buildQueueMessage` 和 `Queue.send` 之前结束，因此不会计算窗口或触发任何出站请求。
+入口完成路由、方法、体积限制、请求体读取和 JSON 解析后，先调用由 `CloudflareWebhookTestPayloadSchema` 支持的小型纯函数识别官方测试请求。只有 `text` 包含完整官方普通 URL 标记 `This is a test message sent from https://cloudflare.com.` 时才返回 `200` 与 `{"message":"Webhook test accepted"}`；Markdown 链接变体不属于官方契约。该分支在 `parseEnv`、时钟读取、`buildQueueMessage` 和 `Queue.send` 之前结束，因此不会计算窗口或触发任何出站请求。
 
 不满足测试 Schema 的输入继续进入原有 `CloudflareAlertPayloadSchema`。因此任意 `{"text":"hello"}`、带普通 `text` 但缺少真实告警字段的对象以及畸形 JSON 仍按输入错误返回 `400`；有效真实 WAF 告警继续只在 Queue 写入成功后返回 `202`。
 
@@ -277,7 +277,7 @@ Queue `max_batch_size = 1`，使确认只对应一个事件。无效 Queue Messa
 ### 单元测试
 
 - Payload、Queue Message、配置、GraphQL 响应和 AI 输出 Schema。
-- 官方 Webhook 测试 Schema 接受完整标记并拒绝任意文本。
+- 官方 Webhook 测试 Schema 接受包含普通 `https://cloudflare.com` URL 的完整官方标记，并拒绝任意文本与 Markdown 链接变体。
 - 窗口计算、UTC 归一和 Consumer 窗口一致性校验。
 - Normalizer、零分母与各比例 Statistics、阈值边界 Rules。
 - AI Evidence 交叉校验、建议限制和降级状态。

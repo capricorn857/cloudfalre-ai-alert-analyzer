@@ -3,7 +3,7 @@ import { z } from "zod";
 import { UtcDateTimeSchema, ZonedDateTimeSchema } from "./time";
 
 const CLOUDFLARE_WEBHOOK_TEST_MARKER =
-  "This is a test message sent from [https://cloudflare.com](https://cloudflare.com).";
+  "This is a test message sent from https://cloudflare.com.";
 
 export const CloudflareWebhookTestPayloadSchema = z.object({
   text: z.string().refine((value) => value.includes(CLOUDFLARE_WEBHOOK_TEST_MARKER)),

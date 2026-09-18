@@ -140,6 +140,13 @@
 - [x] 13.3 在同一集成测试先覆盖任意 `{"text":"hello"}`、畸形 JSON、带 `text` 但缺少必需字段的畸形真实告警仍返回 `400`，并保留原有有效告警、无效告警和 Queue 失败断言；再最小修改 `src/api/cloudflare-alert.ts`，仅在 JSON 解析后、真实 WAF Schema 前加入无副作用短路响应。
 - [x] 13.4 运行 `npm run typecheck`、`npm run lint`、`npm test`、`openspec validate implement-waf-alert-analyzer-mvp --strict`、OpenSpec 工作流校验脚本和 `gitnexus detect-changes --scope all`；检查本次 diff 不含 Credential，确认未运行部署、未修改 Cloudflare 资源且未写入 Secret后，再按真实结果勾选 13 与子任务。
 
+## 14. Cloudflare 官方测试文案回归修复
+
+- [x] 14. 纠正测试握手对官方普通 URL 文案的识别；完成条件为 14.1 至 14.3 全部通过，且真实 WAF 校验和无副作用边界不变
+- [x] 14.1 在单元和 Workers 集成测试中将官方原始 Payload 改为普通 `https://cloudflare.com` URL，增加 Markdown 链接变体被拒绝的回归断言，并确认官方 Payload 在实现修改前因返回 `400` 而失败。
+- [x] 14.2 在 `src/domain/alert.ts` 仅将测试标记修正为官方普通 URL 文案；验证官方 Payload 返回 `200`，且 Queue、时钟和外部 Fetch 仍未调用。
+- [x] 14.3 运行 `npm run types`、`npm run typecheck`、`npm run lint`、`npm test`、OpenSpec 严格校验、工作流校验和 Credential 扫描；确认未运行部署、未修改 Cloudflare 资源且未写入 Secret。
+
 ## 验证命令
 
 ```bash

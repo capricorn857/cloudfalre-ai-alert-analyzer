@@ -17,6 +17,10 @@ const payload = {
 };
 
 const officialWebhookTestPayload = {
+  text: "Hello World! This is a test message sent from https://cloudflare.com. If you can see this, your webhook is configured properly.",
+};
+
+const markdownLinkWebhookTestPayload = {
   text: "Hello World! This is a test message sent from [https://cloudflare.com](https://cloudflare.com). If you can see this, your webhook is configured properly.",
 };
 
@@ -89,6 +93,18 @@ describe("Cloudflare alert route", () => {
       (
         await handleCloudflareAlert(
           new Request(url, { method: "POST", body: JSON.stringify({ ...payload, data: {} }) }),
+          env,
+          { clock: fixedClock },
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await handleCloudflareAlert(
+          new Request(url, {
+            method: "POST",
+            body: JSON.stringify(markdownLinkWebhookTestPayload),
+          }),
           env,
           { clock: fixedClock },
         )
