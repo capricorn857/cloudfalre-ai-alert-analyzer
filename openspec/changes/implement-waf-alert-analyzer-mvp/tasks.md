@@ -147,6 +147,14 @@
 - [x] 14.2 在 `src/domain/alert.ts` 仅将测试标记修正为官方普通 URL 文案；验证官方 Payload 返回 `200`，且 Queue、时钟和外部 Fetch 仍未调用。
 - [x] 14.3 运行 `npm run types`、`npm run typecheck`、`npm run lint`、`npm test`、OpenSpec 严格校验、工作流校验和 Credential 扫描；确认未运行部署、未修改 Cloudflare 资源且未写入 Secret。
 
+## 15. 独立可配置的 LLM 超时
+
+- [x] 15. 实现独立、可覆盖且有界的 LLM 单次调用超时；完成条件为 15.1 至 15.4 全部通过，且不改变 GraphQL、企业微信、Queue Message、LLM 重试或输出校验语义
+- [x] 15.1 在 `test/unit/config/env.test.ts` 先增加失败测试，断言缺少 `llmTimeoutMs` 时 `parseEnv` 返回 `30000`，显式合法值覆盖默认值，`1000` 与 `120000` 边界通过，而 `999`、`120001`、非整数和非数字失败；运行 `npm test -- test/unit/config/env.test.ts` 确认实现前因字段缺失或未校验而失败。
+- [x] 15.2 新增 `test/unit/config/dependencies.test.ts` 的失败测试，使用独立的 `requestTimeoutMs = 10000` 与 `llmTimeoutMs = 30000` 组合依赖并注入永不完成的 Fetch；使用 fake timers 断言 LLM 在 10 秒时仍未中止、在 30 秒时映射为 `llm_timeout`，同时核对 GraphQL 与 WeCom 仍接收 `requestTimeoutMs`。不得通过访问 Client 私有字段完成断言。
+- [x] 15.3 最小修改 `src/config/env.ts`，在 `BusinessConfigSchema` 增加 `llmTimeoutMs: z.number().int().min(1000).max(120000).default(30000)`；修改 `src/config/dependencies.ts` 仅将 LLM Client 的 `timeoutMs` 改为 `config.business.llmTimeoutMs`；在 `wrangler.jsonc` 的 `BUSINESS_CONFIG` 显式增加 `"llmTimeoutMs": 30000`。运行 15.1、15.2 的目标测试，确认从预期失败变为通过，且既有 LLM timeout 仍映射为 `llm_timeout` 并执行规则降级。
+- [x] 15.4 更新 `README.md`、`docs/deployment-verification.md` 和 `docs/release-checklist.md`，说明 `llmTimeoutMs` 的默认值、合法范围、覆盖方式和仅作用于 LLM 的边界；运行 `npm run types`、`npm run typecheck`、`npm run lint`、`npm test`、`openspec validate implement-waf-alert-analyzer-mvp --strict`、OpenSpec 工作流校验、`gitnexus detect-changes --scope all` 和 Credential 扫描。确认没有修改 Queue Message、没有增加 LLM 重试、没有处理 `llm_output_invalid`，且未部署、未写 Secret、未触发真实企业微信。
+
 ## 验证命令
 
 ```bash

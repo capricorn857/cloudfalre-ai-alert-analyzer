@@ -7,6 +7,7 @@ export const BusinessConfigSchema = z.object({
   settleSeconds: z.number().int().min(0).max(900).default(60),
   sampleLimit: z.number().int().min(1).max(100).default(50),
   requestTimeoutMs: z.number().int().min(100).max(30_000),
+  llmTimeoutMs: z.number().int().min(1_000).max(120_000).default(30_000),
   retryCount: z.number().int().min(1).max(2),
   displayTimeZone: z.string().min(1),
   rules: RulesConfigSchema,

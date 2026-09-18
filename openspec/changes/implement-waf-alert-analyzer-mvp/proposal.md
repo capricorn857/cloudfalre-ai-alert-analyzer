@@ -12,6 +12,8 @@ Cloudflare 现有 WAF 告警只能说明异常已经发生，运维和安全人�
 
 Cloudflare Generic Webhook 在创建目的地时会向同一路由发送仅含官方测试文案的 JSON 请求。当前入口在 JSON 解析后直接执行真实 WAF Payload Schema 校验，因此该测试请求被返回 `400 Invalid Cloudflare alert payload`，导致 “Save and Test” 无法完成。系统需要在保持真实告警严格校验、固定窗口和 Queue 行为不变的前提下，识别并无副作用地接受这一官方测试握手。
 
+生产烟雾测试进一步确认，现有共享 `requestTimeoutMs = 10000` 会使 LLM 请求在 10 秒时以 `llm_timeout` 降级；使用相同固定窗口、GraphQL 数据和结构化请求的受控测试约 14 秒才收到 HTTP `200`。LLM 需要独立、可覆盖且有界的超时配置，避免通过放大 GraphQL 和企业微信超时来适配模型响应时间。
+
 ## 目标
 
 - 初始化基于 TypeScript、Cloudflare Workers、Cloudflare Queues、Zod、Wrangler、Vitest 和 ESLint 的 MVP 工程。
@@ -25,6 +27,8 @@ Cloudflare Generic Webhook 在创建目的地时会向同一路由发送仅含�
 - 为外部 API 失败定义稳定、可查询的日志字段，至少包含 `external_service`、`error_code`、`failure_kind`、`retryable` 和 `duration_ms`；HTTP 失败补充 `http_status`，GraphQL 采集失败补充 `snapshot_error_code`。
 - 区分 timeout、network、运行时可识别的 DNS/TLS/connection 和 unknown Fetch 失败；企业微信响应只记录规范化结果类别，不记录原始响应。
 - 如保留异常名称或消息用于诊断，统一执行 Secret 替换、敏感 URL 清除和长度限制，并以包含哨兵敏感值的自动化测试验证。
+- 在 `BUSINESS_CONFIG` 增加可选 `llmTimeoutMs`：未配置时默认 `30000` 毫秒，显式配置时覆盖默认值，合法范围为 `1000` 至 `120000` 毫秒，且只作用于 LLM Client。
+- 保持 `requestTimeoutMs` 继续控制 Cloudflare GraphQL 和企业微信 Client，不因 LLM 变慢而扩大其他外部依赖的等待时间。
 - 准备单套 Worker/Queue 的发布检查清单和人工门禁，但不创建远端资源、不写入真实 Secret，也不执行部署。
 
 ## 非目标
@@ -36,6 +40,7 @@ Cloudflare Generic Webhook 在创建目的地时会向同一路由发送仅含�
 - 不因企业微信最终失败重新执行 GraphQL、统计、规则或 AI 分析。
 - 不将任意 `{"text":"..."}` 视为官方测试请求，不放宽真实 WAF Payload Schema，也不在本次修复中实现 `cf-webhook-auth`。
 - 不在本 Change 中创建远端资源、写入真实 Secret 或执行远端部署。
+- 不在本次超时配置修订中增加 LLM 重试，也不处理独立发现的 `llm_output_invalid` 输出兼容问题。
 
 ## Capabilities
 
@@ -58,6 +63,7 @@ Cloudflare Generic Webhook 在创建目的地时会向同一路由发送仅含�
 - 新增对 Cloudflare GraphQL、兼容 OpenAI 的 LLM API 和企业微信 Webhook 的出站请求。
 - 可观测性修复影响 `src/clients/` 的外部失败分类、`src/pipeline/` 的错误上下文传播、`src/observability/` 的结构化日志与脱敏，以及对应单元和 Workers 集成测试；不改变外部 HTTP API、Queue Message 或基础设施契约。
 - Webhook 测试握手影响 `src/domain/alert.ts` 的边界 Schema、`src/api/cloudflare-alert.ts` 的 JSON 解析后分支和 `test/integration/cloudflare-alert-route.test.ts`；不改变 Queue Message、固定窗口或下游分析契约。
+- LLM 独立超时配置影响 `src/config/env.ts`、`src/config/dependencies.ts`、`wrangler.jsonc`、配置与依赖组合测试及运行文档；不改变 Queue Message、LLM 请求体、输出 Schema、重试或降级契约。
 - 需要三项 Workers Secrets：`CLOUDFLARE_API_TOKEN`、`LLM_API_KEY`、`WECOM_WEBHOOK_URL`；MVP 不配置入站 Webhook Secret。
 - 未鉴权的公网 Webhook 存在伪造请求和 Queue 滥用风险，MVP 通过严格 Payload 校验、受支持告警类型过滤、请求体大小限制和平台侧流量观测降低风险。
 - MVP 不引入数据库、持久化幂等、DLQ、Workflows、自建服务器或自动 Cloudflare 配置变更。
@@ -84,4 +90,6 @@ Cloudflare Generic Webhook 在创建目的地时会向同一路由发送仅含�
 - 企业微信 timeout、network、运行时可识别的 DNS/TLS/connection、unknown Fetch 异常，以及 HTTP `4xx`/`429`/`5xx`、非法响应和非零 `errcode` 均映射到稳定分类；日志只记录规范化响应类别，不记录原始响应。
 - 当异常名称或消息包含哨兵 Webhook URL、Token、API Key 或 key 时，日志中不得出现任何对应明文，且诊断文本经过长度限制。
 - 企业微信最终失败仍确认 Queue Message，且不重新执行 GraphQL、统计、规则或 AI 分析；LLM 失败仍按既有规则降级。
+- 未配置 `llmTimeoutMs` 时 LLM Client 使用 `30000` 毫秒；显式配置合法值时使用该值覆盖默认值，低于 `1000` 或高于 `120000` 时配置校验失败。
+- Cloudflare GraphQL 和企业微信 Client 继续使用 `requestTimeoutMs`，只有 LLM Client 使用 `llmTimeoutMs`；既有配置未增加该字段时保持可启动。
 - `npm run types`、`npm run typecheck`、`npm run lint`、`npm test`、OpenSpec 严格校验与 Credential 扫描通过。

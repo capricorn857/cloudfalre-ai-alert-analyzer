@@ -5,7 +5,7 @@
 ## ADDED Requirements
 
 ### Requirement: Validated runtime configuration
-系统 MUST 使用 Schema 校验 Workers Secrets、Wrangler vars 和业务参数。必需 Secrets SHALL 为 `CLOUDFLARE_API_TOKEN`、`LLM_API_KEY` 和 `WECOM_WEBHOOK_URL`；非敏感 vars SHALL 包含 `LLM_BASE_URL`、`LLM_MODEL` 和业务配置。无效配置 MUST 快速失败且不得输出 Secret 值。
+系统 MUST 使用 Schema 校验 Workers Secrets、Wrangler vars 和业务参数。必需 Secrets SHALL 为 `CLOUDFLARE_API_TOKEN`、`LLM_API_KEY` 和 `WECOM_WEBHOOK_URL`；非敏感 vars SHALL 包含 `LLM_BASE_URL`、`LLM_MODEL` 和业务配置。业务配置中的可选 `llmTimeoutMs` MUST 在缺省时解析为 `30000` 毫秒，并 MUST 在显式配置时接受 `1000` 至 `120000` 范围内的整数作为覆盖值。无效配置 MUST 快速失败且不得输出 Secret 值。
 
 #### Scenario: Valid configuration
 - **WHEN** 所有必需配置存在且符合约束
@@ -18,6 +18,22 @@
 #### Scenario: Invalid business parameters
 - **WHEN** 时间窗口、样本上限、超时、重试或规则阈值不符合允许范围
 - **THEN** 系统拒绝配置而不使用隐式或危险值继续处理
+
+#### Scenario: Default LLM timeout
+- **WHEN** `BUSINESS_CONFIG` 未提供 `llmTimeoutMs`
+- **THEN** 运行时配置将 LLM 单次请求超时解析为 `30000` 毫秒，且既有配置保持可启动
+
+#### Scenario: Explicit LLM timeout override
+- **WHEN** `BUSINESS_CONFIG.llmTimeoutMs` 是 `1000` 至 `120000` 范围内的整数
+- **THEN** 运行时配置使用该值覆盖默认 LLM 超时
+
+#### Scenario: Invalid LLM timeout override
+- **WHEN** `BUSINESS_CONFIG.llmTimeoutMs` 低于 `1000`、高于 `120000`、不是整数或不是数字
+- **THEN** 系统拒绝配置且不调用任何外部 API
+
+#### Scenario: External client timeout isolation
+- **WHEN** 系统组合 Cloudflare GraphQL、LLM 和企业微信 Client
+- **THEN** LLM Client 仅使用解析后的 `llmTimeoutMs`，Cloudflare GraphQL 和企业微信 Client 继续使用 `requestTimeoutMs`
 
 ### Requirement: Structured redacted logging
 系统 SHALL 输出单行 JSON 日志，并按阶段包含可用的 `incident_id`、`correlation_id`、告警类型、资源、告警时间、`analysis_window`、`query_started_at`、`processing_started_at`、`queue_attempt` 和外部 API 状态。每个外部依赖最终失败日志 MUST 包含取值为 `cloudflare`、`llm` 或 `wecom` 的 `external_service`，以及稳定的 `error_code`、`failure_kind`、`retryable` 和非负有限数值 `duration_ms`。HTTP 失败 MUST 额外包含 `http_status`；GraphQL 采集失败进入最终处理日志时 MUST 包含 `snapshot_error_code`；企业微信响应只能记录规范化 `response_category`，不得记录原始响应。日志 MUST 对 Credential、Authorization Header、Token、API Key、Webhook URL、Webhook key、过长请求和外部错误响应进行删除、截断或脱敏。

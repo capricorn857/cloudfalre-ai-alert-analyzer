@@ -35,6 +35,8 @@ LLM_MODEL
 
 `LLM_BASE_URL` 填 OpenAI 兼容中转站的 `/v1` 基础地址，不包含 `/chat/completions`。例如中转站请求地址为 `https://relay.example.invalid/v1/chat/completions` 时，变量值应为 `https://relay.example.invalid/v1`。`LLM_MODEL` 必须使用中转站支持的模型标识。
 
+`BUSINESS_CONFIG.llmTimeoutMs` 由 `wrangler.jsonc` 管理，只控制 LLM 单次调用超时。未配置时默认 `30000` 毫秒；显式配置时必须是 `1000` 至 `120000` 范围内的整数并覆盖默认值。`requestTimeoutMs` 继续控制 Cloudflare GraphQL 和企业微信请求。
+
 `CLOUDFLARE_API_TOKEN` 必须拥有 Cloudflare GraphQL Analytics 只读权限并覆盖告警 `zone_tag` 对应 Zone。`WECOM_WEBHOOK_URL` 必须是企业微信机器人完整 Webhook URL。
 
 不要把真实值写入 `wrangler.jsonc`、Git、文档、夹具或日志。
@@ -75,7 +77,7 @@ openspec validate implement-waf-alert-analyzer-mvp --strict
 4. 使用相同 `incident_id` 和 `correlation_id` 关联 Workers Logs。
 5. 确认 Queue 重试不修改 `query_started_at` 或 `analysis_window`。
 6. 确认 GraphQL 使用 `total_events` 计算比例，并保留 Payload `events_count` 作为参考。
-7. 确认 LLM 请求发往 `LLM_BASE_URL + /chat/completions`，模型为 `LLM_MODEL`。
+7. 确认 LLM 请求发往 `LLM_BASE_URL + /chat/completions`，模型为 `LLM_MODEL`，单次调用使用解析后的 `llmTimeoutMs`。
 8. 模拟 LLM 不可用，确认规则降级通知仍能发送。
 9. 模拟企业微信最终失败，确认记录 `notification_failed` 且不重跑 GraphQL 或 AI。
 10. 检查日志不含 Token、API Key、Authorization 或企业微信 Webhook URL。

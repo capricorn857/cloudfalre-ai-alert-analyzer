@@ -16,7 +16,7 @@ export function createProcessAlertDependencies(config: RuntimeConfig): ProcessAl
       baseUrl: config.llmBaseUrl,
       model: config.llmModel,
       apiKey: config.llmApiKey,
-      timeoutMs: config.business.requestTimeoutMs,
+      timeoutMs: config.business.llmTimeoutMs,
       maxOutputTokens: 800,
     }),
     notification: new WeComClient({

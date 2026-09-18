@@ -11,6 +11,8 @@
 - [ ] `WECOM_WEBHOOK_URL` 以 Secret 保存，目标群已确认。
 - [ ] `LLM_BASE_URL` 以 Text 保存，值为中转站 `/v1` 基础地址。
 - [ ] `LLM_MODEL` 以 Text 保存，值为中转站支持的模型标识。
+- [ ] `BUSINESS_CONFIG.llmTimeoutMs` 未配置时默认为 `30000` 毫秒；显式值位于 `1000` 至 `120000`，且只影响 LLM。
+- [ ] Cloudflare GraphQL 和企业微信继续使用 `requestTimeoutMs`，未被 LLM 超时覆盖。
 - [ ] Dashboard 和仓库中不存在第二套 staging/production 配置。
 
 ## 质量门禁

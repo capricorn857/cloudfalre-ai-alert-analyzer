@@ -88,6 +88,8 @@ npm test
 | `BUSINESS_CONFIG` | Wrangler 管理 | `wrangler.jsonc` 中的业务窗口、采样、超时、重试、显示时区和规则阈值。 |
 | `ALERT_QUEUE` | Queue binding | 连接 producer 与 consumer 的 Queue binding，不填为文本配置。 |
 
+`BUSINESS_CONFIG.llmTimeoutMs` 只控制 LLM 单次调用超时，未配置时默认为 `30000` 毫秒；可显式配置 `1000` 至 `120000` 范围内的整数覆盖默认值。Cloudflare GraphQL 和企业微信继续使用 `requestTimeoutMs`，不会随 LLM 超时一起扩大。
+
 `npm run deploy` 使用 `--keep-vars`，以保留 Dashboard 管理的 `LLM_BASE_URL` 和 `LLM_MODEL`。所有凭证均不得进入 `wrangler.jsonc`、Git、日志、测试夹具或本文档。
 
 ## 首次部署
@@ -144,7 +146,7 @@ npm run deploy
 | 初始构建不能重试 | `seed_repo` 初始构建不能重试；创建新的生产分支提交以触发正常构建。 |
 | Wrangler 部署认证异常 | 确认没有将运行时 `CLOUDFLARE_API_TOKEN` 设置为 Builds variable。 |
 | 配置校验失败 | 在 Worker Settings > Variables and Secrets 核对三个 Secret、两个 Text 变量和 `ALERT_QUEUE` binding；确认 `BUSINESS_CONFIG` 符合 `wrangler.jsonc`。 |
-| 未收到 AI 结论 | 查看脱敏日志；LLM 失败时预期会发送确定性规则降级通知。 |
+| 未收到 AI 结论 | 查看脱敏日志的 `error_code` 和 `duration_ms`；`llm_timeout` 可在 `BUSINESS_CONFIG.llmTimeoutMs` 的 `1000` 至 `120000` 范围内调整，其他 LLM 失败仍按确定性规则降级。 |
 | 收到重复通知 | Queue 是至少一次投递；使用通知中的 `incident_id` 和 `correlation_id` 比对重复消息。 |
 | Cloudflare Notifications 无法访问 Webhook | 核对路径、方法与上游通知配置；不要以 Cloudflare Access 阻断无入站鉴权的 MVP Webhook。 |
 

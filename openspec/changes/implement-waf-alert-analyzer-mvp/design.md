@@ -97,6 +97,14 @@ Queue<QueueMessage> (max_batch_size = 1)
 
 `incident_id` 优先使用稳定的 `alert_correlation_id`；若外部值不满足内部标识约束，则在入队前生成并固化新的 UUID。`correlation_id` 始终保留外部关联值。两者在 Queue 重试中均不改变。
 
+### 独立 LLM 超时配置
+
+`BusinessConfigSchema` 增加可选 `llmTimeoutMs`，使用 `z.number().int().min(1000).max(120000).default(30000)` 解析。Zod 默认值保证 `RuntimeConfig.business.llmTimeoutMs` 在配置边界之后始终存在；`wrangler.jsonc` 同时显式写入 `30000`，使运维可以发现并按环境覆盖该值。既有配置即使缺少字段也继续使用 30 秒默认值。
+
+依赖组合保持 Client 级隔离：`CloudflareGraphQLClient` 与 `WeComClient` 继续使用 `requestTimeoutMs`，只有 `LLMClient` 使用 `llmTimeoutMs`。不选择独立 Dashboard Text var，以免业务参数分散并产生配置漂移；也不继续复用共享超时，以免模型变慢扩大 GraphQL 和通知等待时间。
+
+`llmTimeoutMs` 不写入 Queue Message，因为它不参与固定窗口或快照口径；Consumer 每次处理使用当前已校验运行时配置。该配置不引入 LLM 重试，也不改变 `llm_output_invalid`、Evidence 校验或规则降级语义。
+
 ### Webhook 测试握手
 
 入口完成路由、方法、体积限制、请求体读取和 JSON 解析后，先调用由 `CloudflareWebhookTestPayloadSchema` 支持的小型纯函数识别官方测试请求。只有 `text` 包含完整官方普通 URL 标记 `This is a test message sent from https://cloudflare.com.` 时才返回 `200` 与 `{"message":"Webhook test accepted"}`；Markdown 链接变体不属于官方契约。该分支在 `parseEnv`、时钟读取、`buildQueueMessage` 和 `Queue.send` 之前结束，因此不会计算窗口或触发任何出站请求。
@@ -154,7 +162,7 @@ Rules 接收 `Statistics`、受限样本和已校验阈值，输出可序列化 
 
 ### AI 契约
 
-LLM Client 使用配置的 OpenAI 兼容 HTTP endpoint，不引入 SDK。Prompt 分为固定系统约束和一个结构化输入对象；不包含原始 GraphQL 响应或 Credential。返回体先解析协议层，再提取 JSON，再由 `AIAnalysisSchema` 校验，并执行 Evidence 交叉检查：关键实体和值必须能在输入中找到，建议不得声称已执行变更。
+LLM Client 使用配置的 OpenAI 兼容 HTTP endpoint，不引入 SDK，并使用解析后的 `llmTimeoutMs` 作为单次调用上限。Prompt 分为固定系统约束和一个结构化输入对象；不包含原始 GraphQL 响应或 Credential。返回体先解析协议层，再提取 JSON，再由 `AIAnalysisSchema` 校验，并执行 Evidence 交叉检查：关键实体和值必须能在输入中找到，建议不得声称已执行变更。
 
 若任一环节失败，Pipeline 构造显式 `AIUnavailable` 状态。该状态不是异常终止，不触发 Queue 重放。
 
@@ -271,12 +279,14 @@ Queue `max_batch_size = 1`，使确认只对应一个事件。无效 Queue Messa
 - 企业微信成功是不可逆外部副作用。成功返回后任何本地非关键失败不得升级为 Queue retry。
 - 新增日志字段和内部失败上下文为向后兼容的增量，不修改 Webhook、Queue Message 或外部服务请求契约，也不需要数据迁移。
 - 新增官方测试握手是 Webhook 的向后兼容响应分支；真实 WAF、Queue Message、固定窗口及 Consumer 契约均不变，回滚只需恢复上一 Worker 版本。
+- 新增 `llmTimeoutMs` 是向后兼容的可选配置；缺省时使用 `30000`，删除显式字段即可恢复默认值。回滚到旧 Worker 时多余字段由现有 Zod object 行为忽略，不改变 Queue Message。
 
 ## 测试计划
 
 ### 单元测试
 
 - Payload、Queue Message、配置、GraphQL 响应和 AI 输出 Schema。
+- `llmTimeoutMs` 缺省为 `30000`、合法显式值覆盖默认值，并拒绝低于 `1000`、高于 `120000`、非整数和非数字输入。
 - 官方 Webhook 测试 Schema 接受包含普通 `https://cloudflare.com` URL 的完整官方标记，并拒绝任意文本与 Markdown 链接变体。
 - 窗口计算、UTC 归一和 Consumer 窗口一致性校验。
 - Normalizer、零分母与各比例 Statistics、阈值边界 Rules。
@@ -293,6 +303,7 @@ Queue `max_batch_size = 1`，使确认只对应一个事件。无效 Queue Messa
 - Queue 延迟参数、固定消息窗口、晚到/重试消费不漂移。
 - Fetch Mock 覆盖 GraphQL HTTP 200 + `errors`、timeout、429、5xx、永久错误和重试耗尽。
 - LLM 成功、协议错误、Schema 错误、Evidence 越界及规则降级通知。
+- 依赖组合验证 LLM Client 使用 `llmTimeoutMs`，GraphQL 与 WeCom Client 仍使用 `requestTimeoutMs`，且 LLM 超时继续映射为 `llm_timeout` 并降级。
 - WeCom 阶段内重试、成功后不重放、最终失败记录并确认且不重复上游分析。
 - WeCom timeout、HTTP `4xx`/`429`/`5xx`、非法响应和非零 `errcode` 的稳定字段与规范化 `response_category`。
 - GraphQL `collection_failed` 的具体 `errorCode` 进入最终 `notification_failed.snapshot_error_code`。
@@ -312,6 +323,7 @@ Queue `max_batch_size = 1`，使确认只对应一个事件。无效 Queue Messa
 - [多个 GraphQL 请求可能部分成功] -> 只有满足 Incident 最小数据契约才进入统计；否则发送采集失败通知，不拼接不可解释的部分结果。
 - [AI Evidence 语义校验无法证明所有自然语言均正确] -> 限制字段与长度、验证关键实体和值、Formatter 分隔事实和推断；人工仍需根据 Evidence 决策。
 - [Workers 执行预算限制短暂退避] -> 严格限制尝试次数、请求超时、样本和输出大小；在已部署 Worker 记录各阶段耗时。
+- [过大的 LLM 超时延长 Queue Consumer 占用] -> 将配置限制为最多 `120000` 毫秒，不增加 LLM 重试，并保留超时后的规则降级通知。
 - [成功通知后进程异常仍可能发生平台级重复] -> 避免应用主动抛错，但无持久化幂等时不能承诺 exactly-once。
 - [Workers Runtime 不保证暴露可移植的 DNS/TLS/connection 细节] -> 仅在存在可靠信号时细分，否则稳定回退为 `network`，避免伪精确分类。
 - [诊断文本可能携带 Credential 或敏感 URL] -> 优先记录稳定字段；可选摘要在分类边界和 Logger 两层脱敏并限制长度，测试使用哨兵敏感值验证无明文残留。
