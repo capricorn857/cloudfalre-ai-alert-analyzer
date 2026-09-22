@@ -23,6 +23,13 @@ export interface AppErrorDetails {
   readonly durationMs?: number;
   readonly httpStatus?: number;
   readonly responseCategory?: ResponseCategory;
+  readonly finishReason?: string;
+  readonly refusalPresent?: boolean;
+  readonly contentLength?: number;
+  readonly completionTokens?: number;
+  readonly reasoningTokens?: number;
+  readonly validationStage?: "finish_reason" | "refusal" | "parsing" | "schema" | "evidence";
+  readonly schemaIssuePaths?: readonly string[];
 }
 
 export interface ExternalFailure {
@@ -33,6 +40,13 @@ export interface ExternalFailure {
   readonly durationMs: number;
   readonly httpStatus?: number;
   readonly responseCategory?: ResponseCategory;
+  readonly finishReason?: string;
+  readonly refusalPresent?: boolean;
+  readonly contentLength?: number;
+  readonly completionTokens?: number;
+  readonly reasoningTokens?: number;
+  readonly validationStage?: AppErrorDetails["validationStage"];
+  readonly schemaIssuePaths?: readonly string[];
 }
 
 export class AppError extends Error {
@@ -44,6 +58,13 @@ export class AppError extends Error {
   readonly durationMs: number | undefined;
   readonly httpStatus: number | undefined;
   readonly responseCategory: ResponseCategory | undefined;
+  readonly finishReason: string | undefined;
+  readonly refusalPresent: boolean | undefined;
+  readonly contentLength: number | undefined;
+  readonly completionTokens: number | undefined;
+  readonly reasoningTokens: number | undefined;
+  readonly validationStage: AppErrorDetails["validationStage"];
+  readonly schemaIssuePaths: readonly string[] | undefined;
 
   constructor(
     code: string,
@@ -62,6 +83,13 @@ export class AppError extends Error {
     this.durationMs = details.durationMs;
     this.httpStatus = details.httpStatus ?? status;
     this.responseCategory = details.responseCategory;
+    this.finishReason = details.finishReason;
+    this.refusalPresent = details.refusalPresent;
+    this.contentLength = details.contentLength;
+    this.completionTokens = details.completionTokens;
+    this.reasoningTokens = details.reasoningTokens;
+    this.validationStage = details.validationStage;
+    this.schemaIssuePaths = details.schemaIssuePaths;
   }
 }
 
@@ -166,5 +194,22 @@ export function toExternalFailure(
     ...(classified.responseCategory === undefined
       ? {}
       : { responseCategory: classified.responseCategory }),
+    ...(classified.finishReason === undefined ? {} : { finishReason: classified.finishReason }),
+    ...(classified.refusalPresent === undefined
+      ? {}
+      : { refusalPresent: classified.refusalPresent }),
+    ...(classified.contentLength === undefined ? {} : { contentLength: classified.contentLength }),
+    ...(classified.completionTokens === undefined
+      ? {}
+      : { completionTokens: classified.completionTokens }),
+    ...(classified.reasoningTokens === undefined
+      ? {}
+      : { reasoningTokens: classified.reasoningTokens }),
+    ...(classified.validationStage === undefined
+      ? {}
+      : { validationStage: classified.validationStage }),
+    ...(classified.schemaIssuePaths === undefined
+      ? {}
+      : { schemaIssuePaths: classified.schemaIssuePaths }),
   };
 }

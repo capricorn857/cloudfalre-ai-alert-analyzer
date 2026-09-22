@@ -41,6 +41,23 @@ function failureLogContext(failure: ExternalFailure): Record<string, unknown> {
     ...(failure.responseCategory === undefined
       ? {}
       : { response_category: failure.responseCategory }),
+    ...(failure.finishReason === undefined ? {} : { finish_reason: failure.finishReason }),
+    ...(failure.refusalPresent === undefined
+      ? {}
+      : { refusal_present: failure.refusalPresent }),
+    ...(failure.contentLength === undefined ? {} : { content_length: failure.contentLength }),
+    ...(failure.completionTokens === undefined
+      ? {}
+      : { completion_tokens: failure.completionTokens }),
+    ...(failure.reasoningTokens === undefined
+      ? {}
+      : { reasoning_tokens: failure.reasoningTokens }),
+    ...(failure.validationStage === undefined
+      ? {}
+      : { validation_stage: failure.validationStage }),
+    ...(failure.schemaIssuePaths === undefined
+      ? {}
+      : { schema_issue_paths: failure.schemaIssuePaths }),
   };
 }
 

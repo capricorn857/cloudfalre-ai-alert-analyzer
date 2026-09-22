@@ -23,6 +23,33 @@ describe("parseEnv", () => {
     expect(result.business.llmTimeoutMs).toBe(30_000);
   });
 
+  it("defaults the LLM output token budget to 2048", () => {
+    const result = parseEnv(validEnv);
+
+    expect(result.business.llmMaxOutputTokens).toBe(2048);
+  });
+
+  it.each([512, 2048, 8192])("accepts an LLM output token budget of %i", (llmMaxOutputTokens) => {
+    const result = parseEnv({
+      ...validEnv,
+      BUSINESS_CONFIG: { ...businessConfig, llmMaxOutputTokens },
+    });
+
+    expect(result.business.llmMaxOutputTokens).toBe(llmMaxOutputTokens);
+  });
+
+  it.each([511, 8193, 512.5, "2048"])(
+    "rejects an invalid LLM output token budget of %j",
+    (llmMaxOutputTokens) => {
+      expect(() =>
+        parseEnv({
+          ...validEnv,
+          BUSINESS_CONFIG: { ...businessConfig, llmMaxOutputTokens },
+        }),
+      ).toThrow(/BUSINESS_CONFIG\.llmMaxOutputTokens/u);
+    },
+  );
+
   it.each([1_000, 60_000, 120_000])(
     "accepts an explicit LLM timeout override of %i milliseconds",
     (llmTimeoutMs) => {

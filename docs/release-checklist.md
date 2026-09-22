@@ -12,7 +12,9 @@
 - [ ] `LLM_BASE_URL` 以 Text 保存，值为中转站 `/v1` 基础地址。
 - [ ] `LLM_MODEL` 以 Text 保存，值为中转站支持的模型标识。
 - [ ] `BUSINESS_CONFIG.llmTimeoutMs` 未配置时默认为 `30000` 毫秒；显式值位于 `1000` 至 `120000`，且只影响 LLM。
+- [ ] `BUSINESS_CONFIG.llmMaxOutputTokens` 未配置时默认为 `2048`；显式值位于 `512` 至 `8192`，且为整数。
 - [ ] Cloudflare GraphQL 和企业微信继续使用 `requestTimeoutMs`，未被 LLM 超时覆盖。
+- [ ] 模型已通过脱敏 `/models` 兼容性验证；Worker 仅使用 `LLM_MODEL`，未硬编码或自动切换模型。
 - [ ] Dashboard 和仓库中不存在第二套 staging/production 配置。
 
 ## 质量门禁

@@ -84,6 +84,34 @@ describe("external dependency failure matrix", () => {
     );
   });
 
+  it("keeps the fallback notification single-shot after a classified LLM output failure", async () => {
+    const dependencies = baseDependencies();
+    dependencies.ai.analyze.mockRejectedValue(
+      new AppError("llm_output_schema_invalid", "llm_output_schema_invalid", false, undefined, {
+        externalService: "llm",
+        failureKind: "invalid_response",
+        durationMs: 17,
+        validationStage: "schema",
+        schemaIssuePaths: ["risk_level", "confidence"],
+      }),
+    );
+
+    await expect(processAlert(queueMessage, dependencies)).resolves.toMatchObject({
+      status: "sent",
+      aiStatus: "unavailable",
+    });
+    expect(dependencies.cloudflare.collectSnapshot).toHaveBeenCalledOnce();
+    expect(dependencies.notification.send).toHaveBeenCalledOnce();
+    expect(dependencies.logger.warn).toHaveBeenCalledWith(
+      "external_api_failed",
+      expect.objectContaining({
+        error_code: "llm_output_schema_invalid",
+        validation_stage: "schema",
+        schema_issue_paths: ["risk_level", "confidence"],
+      }),
+    );
+  });
+
   it("records final notification failure without repeating collection or AI", async () => {
     const dependencies = baseDependencies();
     dependencies.notification.send.mockRejectedValue(

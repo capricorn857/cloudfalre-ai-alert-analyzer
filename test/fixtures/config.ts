@@ -3,6 +3,7 @@ export const businessConfig = {
   settleSeconds: 60,
   sampleLimit: 50,
   requestTimeoutMs: 10_000,
+  llmMaxOutputTokens: 2048,
   retryCount: 2,
   displayTimeZone: "Asia/Shanghai",
   rules: {

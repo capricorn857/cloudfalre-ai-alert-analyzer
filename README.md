@@ -88,7 +88,9 @@ npm test
 | `BUSINESS_CONFIG` | Wrangler 管理 | `wrangler.jsonc` 中的业务窗口、采样、超时、重试、显示时区和规则阈值。 |
 | `ALERT_QUEUE` | Queue binding | 连接 producer 与 consumer 的 Queue binding，不填为文本配置。 |
 
-`BUSINESS_CONFIG.llmTimeoutMs` 只控制 LLM 单次调用超时，未配置时默认为 `30000` 毫秒；可显式配置 `1000` 至 `120000` 范围内的整数覆盖默认值。Cloudflare GraphQL 和企业微信继续使用 `requestTimeoutMs`，不会随 LLM 超时一起扩大。
+`BUSINESS_CONFIG.llmTimeoutMs` 只控制 LLM 单次调用超时，未配置时默认为 `30000` 毫秒；可显式配置 `1000` 至 `120000` 范围内的整数覆盖默认值。`BUSINESS_CONFIG.llmMaxOutputTokens` 控制 `max_completion_tokens`，默认 `2048`，可显式配置 `512` 至 `8192` 的整数。Cloudflare GraphQL 和企业微信继续使用 `requestTimeoutMs`，不会随 LLM 超时或输出预算一起扩大。LLM 仅对 HTTP `429`/`5xx` 最多内部重试一次；输出校验失败直接进入规则降级。
+
+模型切换仍只通过 `LLM_MODEL` 完成。候选模型必须先按[模型兼容性验证记录](docs/llm-model-compatibility.md)使用 Router `/models` 和脱敏固定输入比较，不在 Worker 中自动探测或硬编码模型。
 
 `npm run deploy` 使用 `--keep-vars`，以保留 Dashboard 管理的 `LLM_BASE_URL` 和 `LLM_MODEL`。所有凭证均不得进入 `wrangler.jsonc`、Git、日志、测试夹具或本文档。
 

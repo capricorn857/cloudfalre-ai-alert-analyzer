@@ -18,10 +18,22 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function completion(content: string): Response {
-  return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
-    headers: { "content-type": "application/json" },
-  });
+function completion(
+  content: string,
+  options: { finishReason?: string; refusal?: string | null; usage?: Record<string, unknown> } = {},
+): Response {
+  return new Response(
+    JSON.stringify({
+      choices: [
+        {
+          finish_reason: options.finishReason ?? "stop",
+          message: { content, ...(options.refusal === undefined ? {} : { refusal: options.refusal }) },
+        },
+      ],
+      ...(options.usage === undefined ? {} : { usage: options.usage }),
+    }),
+    { headers: { "content-type": "application/json" } },
+  );
 }
 
 function requestBody(fetchFn: ReturnType<typeof vi.fn<typeof fetch>>) {
@@ -44,7 +56,7 @@ describe("LLMClient", () => {
       model: "test-model",
       apiKey: "llm-test-secret",
       timeoutMs: 1000,
-      maxOutputTokens: 800,
+      maxOutputTokens: 2048,
     });
 
     await expect(client.analyze(input)).resolves.toMatchObject({
@@ -62,7 +74,7 @@ describe("LLMClient", () => {
       apiKey: "llm-test-secret",
       fetchFn,
       timeoutMs: 1000,
-      maxOutputTokens: 800,
+      maxOutputTokens: 2048,
     });
 
     await expect(client.analyze(input)).resolves.toMatchObject({
@@ -73,7 +85,7 @@ describe("LLMClient", () => {
     const body = requestBody(fetchFn);
     expect(body).toMatchObject({
       model: "test-model",
-      max_completion_tokens: 800,
+      max_completion_tokens: 2048,
       response_format: {
         type: "json_schema",
         json_schema: {
@@ -125,21 +137,94 @@ describe("LLMClient", () => {
   });
 
   it.each([
-    completion("not-json"),
-    completion(JSON.stringify({ risk_level: "HIGH" })),
-    completion(JSON.stringify(inventedOutput)),
-    new Response("failed", { status: 500 }),
-  ])("rejects invalid, unsupported, or failed model responses", async (response) => {
+    ["llm_output_not_json", completion("not-json")],
+    ["llm_output_not_json", completion(`\`\`\`json\n${JSON.stringify(validOutput)}\n\`\`\``)],
+    ["llm_output_schema_invalid", completion(JSON.stringify({ risk_level: "HIGH" }))],
+    ["ai_evidence_invalid", completion(JSON.stringify(inventedOutput))],
+  ] as const)("classifies model output failure as %s", async (expectedCode, response) => {
     const client = new LLMClient({
       baseUrl: "https://llm.example.test/v1/",
       model: "test-model",
       apiKey: "llm-test-secret",
       fetchFn: vi.fn<typeof fetch>().mockResolvedValue(response),
       timeoutMs: 1000,
-      maxOutputTokens: 800,
+      maxOutputTokens: 2048,
     });
 
-    await expect(client.analyze(input)).rejects.toBeDefined();
+    await expect(client.analyze(input)).rejects.toMatchObject({ code: expectedCode });
+  });
+
+  it("classifies a length finish reason before parsing content", async () => {
+    const client = new LLMClient({
+      baseUrl: "https://llm.example.test/v1",
+      model: "test-model",
+      apiKey: "llm-test-secret",
+      fetchFn: vi.fn<typeof fetch>().mockResolvedValue(
+        completion(JSON.stringify(validOutput), {
+          finishReason: "length",
+          usage: { completion_tokens: 2048, reasoning_tokens: 123 },
+        }),
+      ),
+      timeoutMs: 1000,
+      maxOutputTokens: 2048,
+    });
+
+    await expect(client.analyze(input)).rejects.toMatchObject({
+      code: "llm_output_truncated",
+      finishReason: "length",
+      completionTokens: 2048,
+      reasoningTokens: 123,
+      validationStage: "finish_reason",
+    });
+  });
+
+  it("classifies a provider refusal without retaining refusal text", async () => {
+    const client = new LLMClient({
+      baseUrl: "https://llm.example.test/v1",
+      model: "test-model",
+      apiKey: "llm-test-secret",
+      fetchFn: vi.fn<typeof fetch>().mockResolvedValue(
+        completion("", { refusal: "sensitive refusal text" }),
+      ),
+      timeoutMs: 1000,
+      maxOutputTokens: 2048,
+    });
+
+    const error = await client.analyze(input).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({
+      code: "llm_refused",
+      refusalPresent: true,
+      validationStage: "refusal",
+    });
+    expect(JSON.stringify(error)).not.toContain("sensitive refusal text");
+  });
+
+  it("records safe schema issue paths without field values", async () => {
+    const invalid = {
+      ...(validOutput as Record<string, unknown>),
+      risk_level: "NOT_A_LEVEL",
+      confidence: 2,
+      recommendations: ["one", "two", "three", "four"],
+    };
+    const client = new LLMClient({
+      baseUrl: "https://llm.example.test/v1",
+      model: "test-model",
+      apiKey: "llm-test-secret",
+      fetchFn: vi.fn<typeof fetch>().mockResolvedValue(completion(JSON.stringify(invalid))),
+      timeoutMs: 1000,
+      maxOutputTokens: 2048,
+    });
+
+    const error = await client.analyze(input).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({
+      code: "llm_output_schema_invalid",
+      validationStage: "schema",
+    });
+    const paths = (error as AppError).schemaIssuePaths ?? [];
+    expect(paths).toContain("risk_level");
+    expect(paths).toContain("confidence");
+    expect(paths).toContain("recommendations");
+    expect(JSON.stringify(error)).not.toContain("NOT_A_LEVEL");
   });
 
   it("attaches stable fields to HTTP and network failures", async () => {
@@ -161,7 +246,7 @@ describe("LLMClient", () => {
         apiKey: "llm-test-secret",
         fetchFn: testCase.fetchFn,
         timeoutMs: 1000,
-        maxOutputTokens: 800,
+        maxOutputTokens: 2048,
       });
 
       const error = await client.analyze(input).catch((caught: unknown) => caught);
@@ -170,6 +255,54 @@ describe("LLMClient", () => {
       expect(error).toMatchObject({ externalService: "llm", ...testCase.expected });
       expect((error as AppError).durationMs).toEqual(expect.any(Number));
     }
+  });
+
+  it.each([429, 503])("retries HTTP %i at most once and returns the successful result", async (status) => {
+    const fetchFn = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response("busy", { status }))
+      .mockResolvedValueOnce(completion(JSON.stringify(validOutput)));
+    const client = new LLMClient({
+      baseUrl: "https://llm.example.test/v1",
+      model: "test-model",
+      apiKey: "llm-test-secret",
+      fetchFn,
+      timeoutMs: 1000,
+      maxOutputTokens: 2048,
+    });
+
+    await expect(client.analyze(input)).resolves.toMatchObject({ riskLevel: "HIGH" });
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([400, 401])("does not retry HTTP %i", async (status) => {
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(new Response("failed", { status }));
+    const client = new LLMClient({
+      baseUrl: "https://llm.example.test/v1",
+      model: "test-model",
+      apiKey: "llm-test-secret",
+      fetchFn,
+      timeoutMs: 1000,
+      maxOutputTokens: 2048,
+    });
+
+    await expect(client.analyze(input)).rejects.toMatchObject({ httpStatus: status });
+    expect(fetchFn).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry output validation failures", async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValue(completion("not-json"));
+    const client = new LLMClient({
+      baseUrl: "https://llm.example.test/v1",
+      model: "test-model",
+      apiKey: "llm-test-secret",
+      fetchFn,
+      timeoutMs: 1000,
+      maxOutputTokens: 2048,
+    });
+
+    await expect(client.analyze(input)).rejects.toMatchObject({ code: "llm_output_not_json" });
+    expect(fetchFn).toHaveBeenCalledOnce();
   });
 
   it("classifies invalid protocol and model output without preserving raw content", async () => {
@@ -183,7 +316,7 @@ describe("LLMClient", () => {
         apiKey: "llm-test-secret",
         fetchFn: vi.fn<typeof fetch>().mockResolvedValue(response),
         timeoutMs: 1000,
-        maxOutputTokens: 800,
+        maxOutputTokens: 2048,
       });
 
       const error = await client.analyze(input).catch((caught: unknown) => caught);

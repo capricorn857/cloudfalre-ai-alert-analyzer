@@ -33,6 +33,7 @@
       "sampleLimit": 50,
       "requestTimeoutMs": 10000,
       "llmTimeoutMs": 30000,
+      "llmMaxOutputTokens": 2048,
       "retryCount": 2,
       "displayTimeZone": "Asia/Shanghai",
       "rules": {

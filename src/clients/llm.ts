@@ -37,11 +37,27 @@ const CompletionResponseSchema = z.object({
   choices: z
     .array(
       z.object({
-        message: z.object({ content: z.string().min(1) }),
+        finish_reason: z.string().optional(),
+        message: z.object({
+          content: z.string().optional(),
+          refusal: z.string().nullable().optional(),
+        }),
       }),
     )
     .min(1),
+  usage: z
+    .object({
+      completion_tokens: z.number().int().nonnegative().optional(),
+      reasoning_tokens: z.number().int().nonnegative().optional(),
+    })
+    .optional(),
 });
+
+type CompletionResponse = z.infer<typeof CompletionResponseSchema>;
+
+function issuePaths(error: z.ZodError): string[] {
+  return [...new Set(error.issues.map((issue) => issue.path.join(".") || "root"))].slice(0, 20);
+}
 
 export interface LLMClientOptions {
   readonly baseUrl: string;
@@ -72,121 +88,137 @@ export class LLMClient {
   async analyze(input: AIAnalysisInput): Promise<AIAnalysis> {
     const startedAt = Date.now();
     const durationMs = () => Date.now() - startedAt;
-    let response: Response;
-    try {
-      response = await this.fetchFn(this.endpoint, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${this.apiKey}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model: this.model,
-          max_completion_tokens: this.maxOutputTokens,
-          response_format: {
-            type: "json_schema",
-            json_schema: {
-              name: "cloudflare_security_analysis",
-              strict: true,
-              schema: {
-                type: "object",
-                additionalProperties: false,
-                required: [
-                  "risk_level",
-                  "attack_type",
-                  "confidence",
-                  "summary",
-                  "evidence",
-                  "recommendations",
-                ],
-                properties: {
-                  risk_level: {
-                    type: "string",
-                    enum: ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
-                  },
-                  attack_type: {
-                    type: "string",
-                    enum: [
-                      "Scanning",
-                      "Brute Force",
-                      "Credential Stuffing",
-                      "API Abuse",
-                      "Bot",
-                      "Vulnerability Scanning",
-                      "Unknown",
-                    ],
-                  },
-                  confidence: { type: "number" },
-                  summary: { type: "string" },
-                  evidence: { type: "array", items: { type: "string" } },
-                  recommendations: { type: "array", items: { type: "string" } },
+    const request = {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${this.apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: this.model,
+        max_completion_tokens: this.maxOutputTokens,
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "cloudflare_security_analysis",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["risk_level", "attack_type", "confidence", "summary", "evidence", "recommendations"],
+              properties: {
+                risk_level: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+                attack_type: {
+                  type: "string",
+                  enum: ["Scanning", "Brute Force", "Credential Stuffing", "API Abuse", "Bot", "Vulnerability Scanning", "Unknown"],
                 },
+                confidence: { type: "number" },
+                summary: { type: "string" },
+                evidence: { type: "array", items: { type: "string" } },
+                recommendations: { type: "array", items: { type: "string" } },
               },
             },
           },
-          messages: [
-            {
-              role: "system",
-              content:
-                "Explain only supplied facts. Do not recalculate statistics, invent evidence, or claim that changes were executed. Return JSON only.",
-            },
-            { role: "user", content: JSON.stringify(input) },
-          ],
-        }),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
-    } catch (error) {
-      throw classifyUnknownError(error, "llm", durationMs());
-    }
-    if (!response.ok) throw classifyHttpError("llm", response.status, durationMs());
+        },
+        messages: [
+          {
+            role: "system",
+            content: "Explain only supplied facts. Do not recalculate statistics, invent evidence, or claim that changes were executed. Return JSON only.",
+          },
+          { role: "user", content: JSON.stringify(input) },
+        ],
+      }),
+      signal: AbortSignal.timeout(this.timeoutMs),
+    } satisfies RequestInit;
 
-    let envelope: z.infer<typeof CompletionResponseSchema>;
-    try {
-      envelope = CompletionResponseSchema.parse(await response.json());
-    } catch {
-      throw new AppError("llm_response_invalid", "llm_response_invalid", false, undefined, {
-        externalService: "llm",
-        failureKind: "invalid_response",
-        durationMs: durationMs(),
-      });
-    }
-    const content = envelope.choices[0]?.message.content;
-    if (content === undefined) {
-      throw new AppError("llm_response_invalid", "llm_response_invalid", false, undefined, {
-        externalService: "llm",
-        failureKind: "invalid_response",
-        durationMs: durationMs(),
-      });
-    }
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      let response: Response;
+      try {
+        response = await this.fetchFn(this.endpoint, request);
+      } catch (error) {
+        throw classifyUnknownError(error, "llm", durationMs());
+      }
+      if (!response.ok) {
+        const error = classifyHttpError("llm", response.status, durationMs());
+        if (error.retryable && attempt === 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 25));
+          continue;
+        }
+        throw error;
+      }
 
-    let unknownOutput: unknown;
-    try {
-      unknownOutput = JSON.parse(content) as unknown;
-    } catch {
-      throw new AppError("llm_output_invalid", "llm_output_invalid", false, undefined, {
-        externalService: "llm",
-        failureKind: "invalid_response",
+      let envelope: CompletionResponse;
+      try {
+        envelope = CompletionResponseSchema.parse(await response.json());
+      } catch {
+        throw new AppError("llm_response_invalid", "llm_response_invalid", false, undefined, {
+          externalService: "llm",
+          failureKind: "invalid_response",
+          durationMs: durationMs(),
+        });
+      }
+      const choice = envelope.choices[0];
+      const content = choice?.message.content;
+      const finishReason = choice?.finish_reason;
+      const refusalPresent = choice?.message.refusal !== undefined && choice.message.refusal !== null;
+      const usage = envelope.usage;
+      const diagnostics = {
+        externalService: "llm" as const,
+        failureKind: "invalid_response" as const,
         durationMs: durationMs(),
-      });
+        ...(finishReason === undefined ? {} : { finishReason }),
+        refusalPresent,
+        ...(content === undefined ? {} : { contentLength: content.length }),
+        ...(usage?.completion_tokens === undefined ? {} : { completionTokens: usage.completion_tokens }),
+        ...(usage?.reasoning_tokens === undefined ? {} : { reasoningTokens: usage.reasoning_tokens }),
+      };
+      if (finishReason === "length") {
+        throw new AppError("llm_output_truncated", "llm_output_truncated", false, undefined, {
+          ...diagnostics,
+          validationStage: "finish_reason",
+        });
+      }
+      if (refusalPresent) {
+        throw new AppError("llm_refused", "llm_refused", false, undefined, {
+          ...diagnostics,
+          validationStage: "refusal",
+        });
+      }
+      if (content === undefined) {
+        throw new AppError("llm_response_invalid", "llm_response_invalid", false, undefined, diagnostics);
+      }
+
+      let unknownOutput: unknown;
+      try {
+        unknownOutput = JSON.parse(content) as unknown;
+      } catch {
+        throw new AppError("llm_output_not_json", "llm_output_not_json", false, undefined, {
+          ...diagnostics,
+          validationStage: "parsing",
+        });
+      }
+      const parsed = LLMOutputSchema.safeParse(unknownOutput);
+      if (!parsed.success) {
+        throw new AppError("llm_output_schema_invalid", "llm_output_schema_invalid", false, undefined, {
+          ...diagnostics,
+          validationStage: "schema",
+          schemaIssuePaths: issuePaths(parsed.error),
+        });
+      }
+      try {
+        validateAIAnalysisEvidence(parsed.data, input);
+      } catch {
+        throw new AppError("ai_evidence_invalid", "ai_evidence_invalid", false, undefined, {
+          ...diagnostics,
+          validationStage: "evidence",
+        });
+      }
+      return parsed.data;
     }
-    const parsed = LLMOutputSchema.safeParse(unknownOutput);
-    if (!parsed.success) {
-      throw new AppError("llm_output_invalid", "llm_output_invalid", false, undefined, {
-        externalService: "llm",
-        failureKind: "invalid_response",
-        durationMs: durationMs(),
-      });
-    }
-    try {
-      validateAIAnalysisEvidence(parsed.data, input);
-    } catch (error) {
-      if (!(error instanceof AppError)) throw error;
-      throw new AppError(error.code, error.message, error.retryable, error.status, {
-        externalService: "llm",
-        failureKind: "invalid_response",
-        durationMs: durationMs(),
-      });
-    }
-    return parsed.data;
+    throw new AppError("llm_unexpected", "llm request failed", true, undefined, {
+      externalService: "llm",
+      failureKind: "unknown",
+      durationMs: durationMs(),
+    });
   }
 }

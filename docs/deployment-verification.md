@@ -35,7 +35,9 @@ LLM_MODEL
 
 `LLM_BASE_URL` 填 OpenAI 兼容中转站的 `/v1` 基础地址，不包含 `/chat/completions`。例如中转站请求地址为 `https://relay.example.invalid/v1/chat/completions` 时，变量值应为 `https://relay.example.invalid/v1`。`LLM_MODEL` 必须使用中转站支持的模型标识。
 
-`BUSINESS_CONFIG.llmTimeoutMs` 由 `wrangler.jsonc` 管理，只控制 LLM 单次调用超时。未配置时默认 `30000` 毫秒；显式配置时必须是 `1000` 至 `120000` 范围内的整数并覆盖默认值。`requestTimeoutMs` 继续控制 Cloudflare GraphQL 和企业微信请求。
+`BUSINESS_CONFIG.llmTimeoutMs` 由 `wrangler.jsonc` 管理，只控制 LLM 单次调用超时。未配置时默认 `30000` 毫秒；显式配置时必须是 `1000` 至 `120000` 范围内的整数并覆盖默认值。`BUSINESS_CONFIG.llmMaxOutputTokens` 默认 `2048`，显式配置必须是 `512` 至 `8192` 的整数。`requestTimeoutMs` 继续控制 Cloudflare GraphQL 和企业微信请求。LLM 429/5xx 最多内部重试一次，输出校验失败不重试。
+
+模型选择只能通过 `LLM_MODEL` 配置；候选模型上线前按[模型兼容性验证记录](llm-model-compatibility.md)执行脱敏比较，不在 Worker 启动时调用 `/models`。
 
 `CLOUDFLARE_API_TOKEN` 必须拥有 Cloudflare GraphQL Analytics 只读权限并覆盖告警 `zone_tag` 对应 Zone。`WECOM_WEBHOOK_URL` 必须是企业微信机器人完整 Webhook URL。
 

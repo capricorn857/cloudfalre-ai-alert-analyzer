@@ -45,6 +45,7 @@ describe("createProcessAlertDependencies", () => {
         ...businessConfig,
         requestTimeoutMs: 10_000,
         llmTimeoutMs: 30_000,
+        llmMaxOutputTokens: 4096,
       },
     });
     const dependencies = createProcessAlertDependencies(config);
@@ -63,6 +64,10 @@ describe("createProcessAlertDependencies", () => {
       30_000,
       10_000,
     ]);
+    const rawLlmBody = fetchMock.mock.calls[2]?.[1]?.body;
+    if (typeof rawLlmBody !== "string") throw new Error("Expected serialized LLM request");
+    const llmBody = JSON.parse(rawLlmBody) as Record<string, unknown>;
+    expect(llmBody.max_completion_tokens).toBe(4096);
   });
 
   it("keeps the LLM request pending until its independent timeout", async () => {
