@@ -30,6 +30,11 @@
   - [x] 5.2 运行 `openspec validate optimize-llm-analysis --strict` 和 `python .agents/skills/openspec-superpowers-workflow/scripts/validate_openspec_workflow.py openspec/changes/optimize-llm-analysis`。
   - [x] 5.3 运行 `gitnexus status`、必要时 `gitnexus analyze` 和 `gitnexus detect-changes --scope all`；核对无 Credential 泄漏，明确未部署、未写 Secret、未改 Cloudflare 资源。
 
+- [x] 6. 对齐 Provider JSON Schema 与本地 Zod Schema
+  - [x] 6.1 在 `test/integration/llm-client.test.ts` 先断言 `response_format.json_schema` 包含 `confidence`、`summary`、`evidence` 和 `recommendations` 的完整边界，并覆盖超限输出仍被本地 Schema 拒绝；运行目标测试确认请求约束断言失败。
+  - [x] 6.2 最小修改 `src/clients/llm.ts`，补齐 Provider Schema 的 `minimum`/`maximum`、`minLength`/`maxLength`、`maxItems`，并强化系统提示词；不得放宽 Zod、截断输出或对 Schema 失败重试。
+  - [x] 6.3 运行目标测试及全量质量门禁，确认规则降级、Evidence 校验、Queue Message 和外部超时语义不变。
+
 ## 验证命令
 
 ```bash

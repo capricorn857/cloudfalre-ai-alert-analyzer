@@ -116,21 +116,26 @@ describe("LLMClient", () => {
                   "Unknown",
                 ],
               },
-              confidence: { type: "number" },
-              summary: { type: "string" },
+              confidence: { type: "number", minimum: 0, maximum: 1 },
+              summary: { type: "string", minLength: 1, maxLength: 1000 },
               evidence: {
                 type: "array",
-                items: { type: "string" },
+                maxItems: 10,
+                items: { type: "string", minLength: 1, maxLength: 500 },
               },
               recommendations: {
                 type: "array",
-                items: { type: "string" },
+                maxItems: 3,
+                items: { type: "string", minLength: 1, maxLength: 500 },
               },
             },
           },
         },
       },
     });
+    const messages = body.messages as { role: string; content: string }[];
+    expect(messages[0]?.content).toContain("recommendations must contain no more than 3 items");
+    expect(messages[0]?.content).toContain("confidence must be between 0 and 1");
     const serialized = JSON.stringify(body);
     expect(serialized).not.toContain("raw_payload");
     expect(serialized).not.toContain("llm-test-secret");
@@ -225,6 +230,32 @@ describe("LLMClient", () => {
     expect(paths).toContain("confidence");
     expect(paths).toContain("recommendations");
     expect(JSON.stringify(error)).not.toContain("NOT_A_LEVEL");
+  });
+
+  it.each([
+    [
+      "recommendation item too long",
+      { ...(validOutput as Record<string, unknown>), recommendations: ["x".repeat(501)] },
+    ],
+    ["summary too long", { ...(validOutput as Record<string, unknown>), summary: "x".repeat(1001) }],
+    [
+      "too many evidence items",
+      { ...(validOutput as Record<string, unknown>), evidence: Array.from({ length: 11 }, () => "fact") },
+    ],
+  ])("rejects %s using the local Schema", async (_caseName, output) => {
+    const client = new LLMClient({
+      baseUrl: "https://llm.example.test/v1",
+      model: "test-model",
+      apiKey: "llm-test-secret",
+      fetchFn: vi.fn<typeof fetch>().mockResolvedValue(completion(JSON.stringify(output))),
+      timeoutMs: 1000,
+      maxOutputTokens: 2048,
+    });
+
+    await expect(client.analyze(input)).rejects.toMatchObject({
+      code: "llm_output_schema_invalid",
+      validationStage: "schema",
+    });
   });
 
   it("attaches stable fields to HTTP and network failures", async () => {

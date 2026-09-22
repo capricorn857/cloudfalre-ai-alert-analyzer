@@ -112,10 +112,18 @@ export class LLMClient {
                   type: "string",
                   enum: ["Scanning", "Brute Force", "Credential Stuffing", "API Abuse", "Bot", "Vulnerability Scanning", "Unknown"],
                 },
-                confidence: { type: "number" },
-                summary: { type: "string" },
-                evidence: { type: "array", items: { type: "string" } },
-                recommendations: { type: "array", items: { type: "string" } },
+                confidence: { type: "number", minimum: 0, maximum: 1 },
+                summary: { type: "string", minLength: 1, maxLength: 1000 },
+                evidence: {
+                  type: "array",
+                  maxItems: 10,
+                  items: { type: "string", minLength: 1, maxLength: 500 },
+                },
+                recommendations: {
+                  type: "array",
+                  maxItems: 3,
+                  items: { type: "string", minLength: 1, maxLength: 500 },
+                },
               },
             },
           },
@@ -123,7 +131,8 @@ export class LLMClient {
         messages: [
           {
             role: "system",
-            content: "Explain only supplied facts. Do not recalculate statistics, invent evidence, or claim that changes were executed. Return JSON only.",
+            content:
+              "You are a security analysis assistant. Analyze only the supplied Incident, Statistics, and Findings. Do not query Cloudflare, recalculate statistics, invent facts, entities, percentages, or evidence, or claim that any configuration or mitigation was executed. Return exactly one JSON object without Markdown fences, explanations, or fields outside the requested schema. confidence must be between 0 and 1. summary must contain 1 to 1000 characters. evidence must contain no more than 10 items, each 1 to 500 characters. recommendations must contain no more than 3 items, each 1 to 500 characters. Every entity in the output must be supported by the supplied input. If data is insufficient, use attack_type Unknown. Recommendations must be guidance only, not claims of executed actions.",
           },
           { role: "user", content: JSON.stringify(input) },
         ],
