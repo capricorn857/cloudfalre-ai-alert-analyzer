@@ -156,7 +156,38 @@ describe("LLMClient", () => {
       maxOutputTokens: 2048,
     });
 
-    await expect(client.analyze(input)).rejects.toMatchObject({ code: expectedCode });
+    await expect(client.analyze(input)).rejects.toMatchObject({
+      code: expectedCode,
+      ...(expectedCode === "ai_evidence_invalid"
+        ? { validationStage: "evidence", evidenceFailureReason: "unsupported_entity" }
+        : {}),
+    });
+  });
+
+  it.each([
+    ["unsupported_entity", { ...validOutput, summary: "Traffic came from 198.51.100.77." }],
+    ["automatic_action_claim", { ...validOutput, recommendations: ["The rule already blocked /api/login successfully."] }],
+    ["insufficient_data", { ...validOutput, attack_type: "Brute Force" }],
+  ] as const)("returns safe Evidence failure reason %s", async (reason, output) => {
+    const evidenceInput = reason === "insufficient_data"
+      ? { ...input, statistics: { ...input.statistics, dataSufficient: false }, findings: input.findings.map((finding) => ({ ...finding, level: "unknown" as const })) }
+      : input;
+    const fetchFn = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(completion(JSON.stringify(output))));
+    const client = new LLMClient({
+      baseUrl: "https://llm.example.test/v1/",
+      model: "test-model",
+      apiKey: "llm-test-secret",
+      fetchFn,
+      timeoutMs: 1000,
+      maxOutputTokens: 2048,
+    });
+    await expect(client.analyze(evidenceInput)).rejects.toMatchObject({
+      code: "ai_evidence_invalid",
+      validationStage: "evidence",
+      evidenceFailureReason: reason,
+      retryable: false,
+    });
+    expect(fetchFn).toHaveBeenCalledOnce();
   });
 
   it("classifies a length finish reason before parsing content", async () => {

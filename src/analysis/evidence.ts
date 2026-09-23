@@ -16,6 +16,11 @@ const asnPattern = /\bAS\d+\b/gu;
 const automaticActionPattern =
   /\b(blocked|banned|modified|updated|changed)\b.{0,40}\b(automatically|successfully|already)\b|\b(automatically|successfully|already)\b.{0,40}\b(blocked|banned|modified|updated|changed)\b|已.{0,20}(封禁|修改)/iu;
 
+export type EvidenceFailureReason =
+  | "unsupported_entity"
+  | "automatic_action_claim"
+  | "insufficient_data";
+
 function values(input: AIAnalysisInput): Set<string> {
   const evidence = input.incident.evidence;
   return new Set([
@@ -55,11 +60,13 @@ export function validateAIAnalysisEvidence(
     !input.statistics.dataSufficient ||
     (input.findings.length > 0 && input.findings.every((finding) => finding.level === "unknown"));
 
-  if (
-    unsupported.length > 0 ||
-    automaticActionPattern.test(text) ||
-    (insufficient && analysis.attackType !== "Unknown")
-  ) {
-    throw new AppError("ai_evidence_invalid", "ai_evidence_invalid", false);
+  let reason: EvidenceFailureReason | undefined;
+  if (unsupported.length > 0) reason = "unsupported_entity";
+  else if (automaticActionPattern.test(text)) reason = "automatic_action_claim";
+  else if (insufficient && analysis.attackType !== "Unknown") reason = "insufficient_data";
+  if (reason !== undefined) {
+    throw new AppError("ai_evidence_invalid", "ai_evidence_invalid", false, undefined, {
+      evidenceFailureReason: reason,
+    });
   }
 }

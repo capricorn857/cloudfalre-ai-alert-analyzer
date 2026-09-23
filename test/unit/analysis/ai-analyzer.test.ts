@@ -57,6 +57,33 @@ describe("runAIAnalysis", () => {
     });
   });
 
+  it("keeps the safe Evidence failure reason during rules degradation", async () => {
+    const snapshotResult = await analyzeWafAlert(
+      queueMessage,
+      { collectSnapshot: () => Promise.resolve(snapshot) },
+      rulesConfig,
+    );
+    const analyze = vi.fn().mockRejectedValue(
+      new AppError("ai_evidence_invalid", "ai_evidence_invalid", false, undefined, {
+        externalService: "llm",
+        failureKind: "invalid_response",
+        durationMs: 19,
+        validationStage: "evidence",
+        evidenceFailureReason: "unsupported_entity",
+      }),
+    );
+
+    await expect(runAIAnalysis(snapshotResult, { analyze })).resolves.toMatchObject({
+      status: "unavailable",
+      failure: {
+        errorCode: "ai_evidence_invalid",
+        validationStage: "evidence",
+        evidenceFailureReason: "unsupported_entity",
+        retryable: false,
+      },
+    });
+  });
+
   it("does not call the model when Cloudflare collection failed or data is empty", async () => {
     const analyze = vi.fn().mockResolvedValue(analysis);
     await expect(

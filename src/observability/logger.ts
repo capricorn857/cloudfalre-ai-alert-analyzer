@@ -17,6 +17,11 @@ const sensitiveKey = /authorization|token|api.?key|secret|webhook.?url|prompt|ra
 const sensitiveParameter = /^(?:authorization|token|api[_-]?key|secret|key)$/iu;
 const urlPattern = /https?:\/\/[^\s"'<>]+/giu;
 const sensitiveAssignment = /\b(authorization|token|api[_-]?key|secret|key)=([^\s&]+)/giu;
+const safeEvidenceFailureReasons = new Set([
+  "unsupported_entity",
+  "automatic_action_claim",
+  "insufficient_data",
+]);
 
 function replaceSecrets(value: string, secrets: readonly string[]): string {
   return secrets.reduce(
@@ -58,6 +63,7 @@ function sanitize(
   maximum: number,
   seen: WeakSet<object>,
 ): unknown {
+  if (key === "completion_tokens" || key === "reasoning_tokens") return value;
   if (sensitiveKey.test(key)) return "[REDACTED]";
   if (typeof value === "string") {
     return sanitizeString(value, secrets, maximum);
@@ -72,6 +78,7 @@ function sanitize(
       readonly reasoningTokens?: number;
       readonly validationStage?: string;
       readonly schemaIssuePaths?: readonly string[];
+      readonly evidenceFailureReason?: string;
     };
     return {
       name: sanitizeString(value.name, secrets, maximum),
@@ -95,6 +102,10 @@ function sanitize(
       ...(diagnostic.schemaIssuePaths === undefined
         ? {}
         : { schemaIssuePaths: diagnostic.schemaIssuePaths.slice(0, 20) }),
+      ...(diagnostic.evidenceFailureReason === undefined ||
+      !safeEvidenceFailureReasons.has(diagnostic.evidenceFailureReason)
+        ? {}
+        : { evidenceFailureReason: diagnostic.evidenceFailureReason }),
     };
   }
   if (seen.has(value)) return "[CIRCULAR]";

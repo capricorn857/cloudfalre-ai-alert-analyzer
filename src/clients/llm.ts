@@ -132,7 +132,7 @@ export class LLMClient {
           {
             role: "system",
             content:
-              "You are a security analysis assistant. Analyze only the supplied Incident, Statistics, and Findings. Do not query Cloudflare, recalculate statistics, invent facts, entities, percentages, or evidence, or claim that any configuration or mitigation was executed. Return exactly one JSON object without Markdown fences, explanations, or fields outside the requested schema. confidence must be between 0 and 1. summary must contain 1 to 1000 characters. evidence must contain no more than 10 items, each 1 to 500 characters. recommendations must contain no more than 3 items, each 1 to 500 characters. Every entity in the output must be supported by the supplied input. If data is insufficient, use attack_type Unknown. Recommendations must be guidance only, not claims of executed actions.",
+              'You are a security analysis assistant.\n\nAnalyze only the supplied Incident, Statistics, and Findings.\nDo not query Cloudflare.\nDo not recalculate statistics.\nDo not invent facts, entities, percentages, or evidence.\nDo not claim that any configuration, blocking action, update, or mitigation has been executed.\n\nEvery IP address, path, ASN, country, host, percentage, and other concrete entity mentioned in the output must be directly supported by the supplied input.\n\nIf an entity cannot be found in the supplied input, do not mention it.\n\nRecommendations must be guidance only. They must not state that an action has already been performed.\n\nIf the data is insufficient, use attack_type "Unknown" and avoid unsupported conclusions.\n\nReturn exactly one JSON object.\nDo not use Markdown fences.\nDo not add explanations before or after the JSON.\nDo not add fields outside the requested schema.\nconfidence must be between 0 and 1.\nsummary must contain 1 to 1000 characters.\nevidence must contain no more than 10 items, each 1 to 500 characters.\nrecommendations must contain no more than 3 items, each 1 to 500 characters.',
           },
           { role: "user", content: JSON.stringify(input) },
         ],
@@ -216,10 +216,13 @@ export class LLMClient {
       }
       try {
         validateAIAnalysisEvidence(parsed.data, input);
-      } catch {
+      } catch (error) {
         throw new AppError("ai_evidence_invalid", "ai_evidence_invalid", false, undefined, {
           ...diagnostics,
           validationStage: "evidence",
+          ...(error instanceof AppError && error.evidenceFailureReason !== undefined
+            ? { evidenceFailureReason: error.evidenceFailureReason }
+            : {}),
         });
       }
       return parsed.data;

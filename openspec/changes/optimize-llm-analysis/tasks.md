@@ -35,6 +35,11 @@
   - [x] 6.2 最小修改 `src/clients/llm.ts`，补齐 Provider Schema 的 `minimum`/`maximum`、`minLength`/`maxLength`、`maxItems`，并强化系统提示词；不得放宽 Zod、截断输出或对 Schema 失败重试。
   - [x] 6.3 运行目标测试及全量质量门禁，确认规则降级、Evidence 校验、Queue Message 和外部超时语义不变。
 
+- [x] 7. 增加 Evidence 失败原因安全诊断
+  - [x] 7.1 在 Evidence、AI Analyzer、LLM Client、失败矩阵和日志脱敏测试中先覆盖 `unsupported_entity`、`automatic_action_claim`、`insufficient_data`，确认失败原因字段当前缺失。
+  - [x] 7.2 将现有 Evidence 规则结果分类为窄枚举，通过 `AppError`、`ExternalFailure` 和 Pipeline 安全日志传递；不记录实体值、原文、Prompt 或凭证，Evidence 失败保持不可重试。
+  - [x] 7.3 强化系统提示词为安全分析约束，并运行全套类型、Lint、测试、OpenSpec 和 GitNexus 验证。
+
 ## 验证命令
 
 ```bash

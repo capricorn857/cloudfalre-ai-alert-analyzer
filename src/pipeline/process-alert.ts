@@ -58,6 +58,9 @@ function failureLogContext(failure: ExternalFailure): Record<string, unknown> {
     ...(failure.schemaIssuePaths === undefined
       ? {}
       : { schema_issue_paths: failure.schemaIssuePaths }),
+    ...(failure.evidenceFailureReason === undefined
+      ? {}
+      : { evidence_failure_reason: failure.evidenceFailureReason }),
   };
 }
 

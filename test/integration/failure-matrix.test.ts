@@ -3,6 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import { processAlert } from "../../src/pipeline/process-alert";
 import { AppError } from "../../src/observability/errors";
 import { queueMessage, rulesConfig, snapshot } from "../fixtures/domain";
+import { LLMClient } from "../../src/clients/llm";
+import { calculateStatistics } from "../../src/analysis/statistics";
+import validOutput from "../fixtures/llm/valid-output.json";
+
+vi.mock("../../src/analysis/statistics", { spy: true });
 
 function baseDependencies() {
   return {
@@ -25,6 +30,27 @@ function baseDependencies() {
 }
 
 describe("external dependency failure matrix", () => {
+  it("uses one LLM attempt, one snapshot and one statistics calculation for Evidence fallback", async () => {
+    vi.mocked(calculateStatistics).mockClear();
+    const dependencies = baseDependencies();
+    const fetchFn = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(Response.json({
+      choices: [{ finish_reason: "stop", message: { content: JSON.stringify({
+        ...validOutput, summary: "Evidence sentinel 203.0.113.99",
+      }) } }],
+    })));
+    const ai = new LLMClient({ baseUrl: "https://llm.example.test/v1", model: "test", apiKey: "test-only", fetchFn, timeoutMs: 1000, maxOutputTokens: 2048 });
+    await expect(processAlert(queueMessage, { ...dependencies, ai })).resolves.toMatchObject({ status: "sent", aiStatus: "unavailable" });
+    expect(fetchFn).toHaveBeenCalledOnce();
+    expect(dependencies.cloudflare.collectSnapshot).toHaveBeenCalledOnce();
+    expect(calculateStatistics).toHaveBeenCalledOnce();
+    expect(dependencies.notification.send).toHaveBeenCalledOnce();
+    const notification = String(dependencies.notification.send.mock.calls[0]?.[0]);
+    expect(notification).toContain("AI 分析暂不可用");
+    expect(notification).not.toContain("Evidence sentinel");
+    expect(dependencies.logger.warn).toHaveBeenCalledWith("external_api_failed", expect.objectContaining({
+      error_code: "ai_evidence_invalid", evidence_failure_reason: "unsupported_entity", retryable: false,
+    }));
+  });
   it("does not call AI when Cloudflare collection is exhausted, but still notifies", async () => {
     const dependencies = baseDependencies();
     dependencies.cloudflare.collectSnapshot.mockRejectedValue(
@@ -108,6 +134,36 @@ describe("external dependency failure matrix", () => {
         error_code: "llm_output_schema_invalid",
         validation_stage: "schema",
         schema_issue_paths: ["risk_level", "confidence"],
+      }),
+    );
+  });
+
+  it("keeps Evidence failures non-retryable and logs only the safe reason", async () => {
+    const dependencies = baseDependencies();
+    dependencies.ai.analyze.mockRejectedValue(
+      new AppError("ai_evidence_invalid", "ai_evidence_invalid", false, undefined, {
+        externalService: "llm",
+        failureKind: "invalid_response",
+        durationMs: 17,
+        validationStage: "evidence",
+        evidenceFailureReason: "automatic_action_claim",
+      }),
+    );
+
+    await expect(processAlert(queueMessage, dependencies)).resolves.toMatchObject({
+      status: "sent",
+      aiStatus: "unavailable",
+    });
+    expect(dependencies.cloudflare.collectSnapshot).toHaveBeenCalledOnce();
+    expect(dependencies.ai.analyze).toHaveBeenCalledOnce();
+    expect(dependencies.notification.send).toHaveBeenCalledOnce();
+    expect(dependencies.logger.warn).toHaveBeenCalledWith(
+      "external_api_failed",
+      expect.objectContaining({
+        error_code: "ai_evidence_invalid",
+        validation_stage: "evidence",
+        evidence_failure_reason: "automatic_action_claim",
+        retryable: false,
       }),
     );
   });

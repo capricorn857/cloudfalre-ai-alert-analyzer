@@ -23,7 +23,11 @@ The LLM client MUST classify response failures without retaining the model conte
 
 #### Scenario: invalid evidence
 - **WHEN** the parsed AI result fails Evidence validation
-- **THEN** the client returns `ai_evidence_invalid` with `validation_stage=evidence` and no relaxed validation
+- **THEN** the client returns `ai_evidence_invalid` with `validation_stage=evidence`, a safe `evidence_failure_reason` of `unsupported_entity`, `automatic_action_claim`, or `insufficient_data`, and no relaxed validation
+
+#### Scenario: safe Evidence failure diagnostics
+- **WHEN** Evidence validation rejects model output
+- **THEN** logs may include only the failure reason enum and bounded response diagnostics, and MUST NOT include unsupported entity values, Evidence text, model output, prompt, or credentials
 
 ### Requirement: configurable output token budget
 The business configuration MUST expose `llmMaxOutputTokens` as an integer from 512 through 8192, defaulting to 2048, and the LLM request MUST use it as `max_completion_tokens`.

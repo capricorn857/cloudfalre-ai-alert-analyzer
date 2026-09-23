@@ -1,3 +1,5 @@
+import type { EvidenceFailureReason } from "../analysis/evidence";
+
 export type ErrorStage = "input" | "config" | "cloudflare" | "llm" | "wecom" | "queue";
 export type ExternalService = "cloudflare" | "llm" | "wecom";
 export type FailureKind =
@@ -30,6 +32,7 @@ export interface AppErrorDetails {
   readonly reasoningTokens?: number;
   readonly validationStage?: "finish_reason" | "refusal" | "parsing" | "schema" | "evidence";
   readonly schemaIssuePaths?: readonly string[];
+  readonly evidenceFailureReason?: EvidenceFailureReason;
 }
 
 export interface ExternalFailure {
@@ -47,6 +50,7 @@ export interface ExternalFailure {
   readonly reasoningTokens?: number;
   readonly validationStage?: AppErrorDetails["validationStage"];
   readonly schemaIssuePaths?: readonly string[];
+  readonly evidenceFailureReason?: EvidenceFailureReason;
 }
 
 export class AppError extends Error {
@@ -65,6 +69,7 @@ export class AppError extends Error {
   readonly reasoningTokens: number | undefined;
   readonly validationStage: AppErrorDetails["validationStage"];
   readonly schemaIssuePaths: readonly string[] | undefined;
+  readonly evidenceFailureReason: EvidenceFailureReason | undefined;
 
   constructor(
     code: string,
@@ -90,6 +95,7 @@ export class AppError extends Error {
     this.reasoningTokens = details.reasoningTokens;
     this.validationStage = details.validationStage;
     this.schemaIssuePaths = details.schemaIssuePaths;
+    this.evidenceFailureReason = details.evidenceFailureReason;
   }
 }
 
@@ -211,5 +217,8 @@ export function toExternalFailure(
     ...(classified.schemaIssuePaths === undefined
       ? {}
       : { schemaIssuePaths: classified.schemaIssuePaths }),
+    ...(classified.evidenceFailureReason === undefined
+      ? {}
+      : { evidenceFailureReason: classified.evidenceFailureReason }),
   };
 }
