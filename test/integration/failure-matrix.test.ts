@@ -6,6 +6,7 @@ import { queueMessage, rulesConfig, snapshot } from "../fixtures/domain";
 import { LLMClient } from "../../src/clients/llm";
 import { calculateStatistics } from "../../src/analysis/statistics";
 import validOutput from "../fixtures/llm/valid-output.json";
+import { structuredAnalysis } from "../fixtures/structured-ai";
 
 vi.mock("../../src/analysis/statistics", { spy: true });
 
@@ -13,14 +14,7 @@ function baseDependencies() {
   return {
     cloudflare: { collectSnapshot: vi.fn().mockResolvedValue(snapshot) },
     ai: {
-      analyze: vi.fn().mockResolvedValue({
-        riskLevel: "HIGH",
-        attackType: "Brute Force",
-        confidence: 0.8,
-        summary: "Traffic targets /api/login.",
-        evidence: ["/api/login = 45%"],
-        recommendations: ["Review /api/login rate limiting."],
-      }),
+      analyze: vi.fn().mockResolvedValue(structuredAnalysis()),
     },
     notification: { send: vi.fn().mockResolvedValue(undefined) },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -35,8 +29,9 @@ describe("external dependency failure matrix", () => {
     const dependencies = baseDependencies();
     const fetchFn = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(Response.json({
       choices: [{ finish_reason: "stop", message: { content: JSON.stringify({
-        ...validOutput, summary: "Evidence sentinel 203.0.113.99",
+        ...validOutput, attack: { type: "Unknown", confidence: 0, evidence_ids: ["missing:0"] },
       }) } }],
+      usage: { completion_tokens: 77, reasoning_tokens: 12 },
     })));
     const ai = new LLMClient({ baseUrl: "https://llm.example.test/v1", model: "test", apiKey: "test-only", fetchFn, timeoutMs: 1000, maxOutputTokens: 2048 });
     await expect(processAlert(queueMessage, { ...dependencies, ai })).resolves.toMatchObject({ status: "sent", aiStatus: "unavailable" });
@@ -48,7 +43,8 @@ describe("external dependency failure matrix", () => {
     expect(notification).toContain("AI 分析暂不可用");
     expect(notification).not.toContain("Evidence sentinel");
     expect(dependencies.logger.warn).toHaveBeenCalledWith("external_api_failed", expect.objectContaining({
-      error_code: "ai_evidence_invalid", evidence_failure_reason: "unsupported_entity", retryable: false,
+      error_code: "ai_reference_invalid", validation_reason: "reference_not_found", retryable: false,
+      finish_reason: "stop", completion_tokens: 77, reasoning_tokens: 12,
     }));
   });
   it("does not call AI when Cloudflare collection is exhausted, but still notifies", async () => {
@@ -118,7 +114,7 @@ describe("external dependency failure matrix", () => {
         failureKind: "invalid_response",
         durationMs: 17,
         validationStage: "schema",
-        schemaIssuePaths: ["risk_level", "confidence"],
+        validationPaths: ["risk.level", "attack.confidence"],
       }),
     );
 
@@ -133,7 +129,7 @@ describe("external dependency failure matrix", () => {
       expect.objectContaining({
         error_code: "llm_output_schema_invalid",
         validation_stage: "schema",
-        schema_issue_paths: ["risk_level", "confidence"],
+        validation_paths: ["risk.level", "attack.confidence"],
       }),
     );
   });
@@ -141,12 +137,12 @@ describe("external dependency failure matrix", () => {
   it("keeps Evidence failures non-retryable and logs only the safe reason", async () => {
     const dependencies = baseDependencies();
     dependencies.ai.analyze.mockRejectedValue(
-      new AppError("ai_evidence_invalid", "ai_evidence_invalid", false, undefined, {
+      new AppError("ai_claim_unsupported", "ai_claim_unsupported", false, undefined, {
         externalService: "llm",
         failureKind: "invalid_response",
         durationMs: 17,
-        validationStage: "evidence",
-        evidenceFailureReason: "automatic_action_claim",
+        validationStage: "support",
+        validationReason: "unsupported_claim_type",
       }),
     );
 
@@ -160,9 +156,9 @@ describe("external dependency failure matrix", () => {
     expect(dependencies.logger.warn).toHaveBeenCalledWith(
       "external_api_failed",
       expect.objectContaining({
-        error_code: "ai_evidence_invalid",
-        validation_stage: "evidence",
-        evidence_failure_reason: "automatic_action_claim",
+        error_code: "ai_claim_unsupported",
+        validation_stage: "support",
+        validation_reason: "unsupported_claim_type",
         retryable: false,
       }),
     );

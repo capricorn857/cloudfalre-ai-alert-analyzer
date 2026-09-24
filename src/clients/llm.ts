@@ -1,62 +1,27 @@
 import { z } from "zod";
 
-import { validateAIAnalysisEvidence, type AIAnalysisInput } from "../analysis/evidence";
-import { AIAnalysisSchema, type AIAnalysis } from "../domain/ai-analysis";
+import { AIAnalysisWireSchema, toAIAnalysis, type AIAnalysis } from "../domain/ai-analysis";
+import { EvidenceCatalogSchema, type EvidenceCatalog } from "../domain/evidence-catalog";
+import { rememberCompletionDiagnostics, safeFinishReason, safeValidationPaths, type ValidationReason } from "../observability/ai-diagnostics";
 import { AppError, classifyHttpError, classifyUnknownError } from "../observability/errors";
 import { workerFetch } from "./fetch";
 
-const LLMOutputSchema = z
-  .object({
-    risk_level: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]),
-    attack_type: z.enum([
-      "Scanning",
-      "Brute Force",
-      "Credential Stuffing",
-      "API Abuse",
-      "Bot",
-      "Vulnerability Scanning",
-      "Unknown",
-    ]),
-    confidence: z.number().min(0).max(1),
-    summary: z.string().min(1).max(1000),
-    evidence: z.array(z.string().min(1).max(500)).max(10),
-    recommendations: z.array(z.string().min(1).max(500)).max(3),
-  })
-  .transform((output) =>
-    AIAnalysisSchema.parse({
-      riskLevel: output.risk_level,
-      attackType: output.attack_type,
-      confidence: output.confidence,
-      summary: output.summary,
-      evidence: output.evidence,
-      recommendations: output.recommendations,
-    }),
-  );
-
 const CompletionResponseSchema = z.object({
-  choices: z
-    .array(
-      z.object({
-        finish_reason: z.string().optional(),
-        message: z.object({
-          content: z.string().optional(),
-          refusal: z.string().nullable().optional(),
-        }),
-      }),
-    )
-    .min(1),
-  usage: z
-    .object({
-      completion_tokens: z.number().int().nonnegative().optional(),
-      reasoning_tokens: z.number().int().nonnegative().optional(),
-    })
-    .optional(),
+  choices: z.array(z.object({
+    finish_reason: z.string().optional(),
+    message: z.object({ content: z.string().optional(), refusal: z.string().nullable().optional() }),
+  })).min(1),
+  usage: z.object({
+    completion_tokens: z.number().int().nonnegative().optional(),
+    reasoning_tokens: z.number().int().nonnegative().optional(),
+  }).optional(),
 });
-
 type CompletionResponse = z.infer<typeof CompletionResponseSchema>;
 
-function issuePaths(error: z.ZodError): string[] {
-  return [...new Set(error.issues.map((issue) => issue.path.join(".") || "root"))].slice(0, 20);
+function schemaValidationReason(error: z.ZodError): ValidationReason {
+  if (error.issues.some((issue) => issue.code === "unrecognized_keys")) return "unknown_field";
+  if (error.issues.some((issue) => issue.code === "too_big" || issue.code === "too_small")) return "limit_exceeded";
+  return "invalid_shape";
 }
 
 export interface LLMClientOptions {
@@ -85,15 +50,23 @@ export class LLMClient {
     this.maxOutputTokens = options.maxOutputTokens;
   }
 
-  async analyze(input: AIAnalysisInput): Promise<AIAnalysis> {
+  async analyze(input: EvidenceCatalog): Promise<AIAnalysis> {
     const startedAt = Date.now();
     const durationMs = () => Date.now() - startedAt;
+    const parsedCatalog = EvidenceCatalogSchema.safeParse(input);
+    if (!parsedCatalog.success) {
+      throw new AppError("ai_catalog_invalid", "ai_catalog_invalid", false, undefined, {
+        failureKind: "invalid_response",
+        validationStage: "catalog",
+        validationReason: "invalid_catalog",
+        validationPaths: ["root"],
+        issueCount: parsedCatalog.error.issues.length,
+      });
+    }
+
     const request = {
       method: "POST",
-      headers: {
-        authorization: `Bearer ${this.apiKey}`,
-        "content-type": "application/json",
-      },
+      headers: { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
       body: JSON.stringify({
         model: this.model,
         max_completion_tokens: this.maxOutputTokens,
@@ -102,39 +75,34 @@ export class LLMClient {
           json_schema: {
             name: "cloudflare_security_analysis",
             strict: true,
-            schema: {
-              type: "object",
-              additionalProperties: false,
-              required: ["risk_level", "attack_type", "confidence", "summary", "evidence", "recommendations"],
-              properties: {
-                risk_level: { type: "string", enum: ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
-                attack_type: {
-                  type: "string",
-                  enum: ["Scanning", "Brute Force", "Credential Stuffing", "API Abuse", "Bot", "Vulnerability Scanning", "Unknown"],
-                },
-                confidence: { type: "number", minimum: 0, maximum: 1 },
-                summary: { type: "string", minLength: 1, maxLength: 1000 },
-                evidence: {
-                  type: "array",
-                  maxItems: 10,
-                  items: { type: "string", minLength: 1, maxLength: 500 },
-                },
-                recommendations: {
-                  type: "array",
-                  maxItems: 3,
-                  items: { type: "string", minLength: 1, maxLength: 500 },
-                },
-              },
-            },
+            schema: z.toJSONSchema(AIAnalysisWireSchema),
           },
         },
         messages: [
           {
             role: "system",
             content:
-              'You are a security analysis assistant.\n\nAnalyze only the supplied Incident, Statistics, and Findings.\nDo not query Cloudflare.\nDo not recalculate statistics.\nDo not invent facts, entities, percentages, or evidence.\nDo not claim that any configuration, blocking action, update, or mitigation has been executed.\n\nEvery IP address, path, ASN, country, host, percentage, and other concrete entity mentioned in the output must be directly supported by the supplied input.\n\nIf an entity cannot be found in the supplied input, do not mention it.\n\nRecommendations must be guidance only. They must not state that an action has already been performed.\n\nIf the data is insufficient, use attack_type "Unknown" and avoid unsupported conclusions.\n\nReturn exactly one JSON object.\nDo not use Markdown fences.\nDo not add explanations before or after the JSON.\nDo not add fields outside the requested schema.\nconfidence must be between 0 and 1.\nsummary must contain 1 to 1000 characters.\nevidence must contain no more than 10 items, each 1 to 500 characters.\nrecommendations must contain no more than 3 items, each 1 to 500 characters.',
+              "Analyze only the supplied Evidence Catalog. Do not query Cloudflare, recalculate statistics, invent facts, repeat entity values, add free text, or claim an action was executed.\n" +
+              "Each risk, attack, observation, and recommendation must cite its own evidence_ids. Use only catalog IDs and exactly the roles below; do not add unrelated evidence. Do not infer relationships between aggregate entries. Samples support only one observed event and never aggregate proportions.\n" +
+              "Risk rules:\n" +
+              "- HIGH or MEDIUM risk: quality + one highest-level risk finding + its stat. The level must equal the highest level among ip/path/country/asn/allow/request_rate findings; quality must be riskAssessable.\n" +
+              "- LOW risk: quality + total, only when the risk finding set is empty and quality is riskAssessable. LOW does not mean safe.\n" +
+              "- CRITICAL risk is unsupported. Unknown risk uses no evidence.\n" +
+              "Attack rules:\n" +
+              "- Bot attack only: stat_ua + high UA finding + stat_rate + high rate finding; quality must be riskAssessable, UA denominator >= 10 and confidence > 0 and <= 0.6.\n" +
+              "- All other non-Unknown attack types are unsupported. Unknown attack uses confidence 0 and no evidence.\n" +
+              "Observation rules:\n" +
+              "- aggregate_concentration: matching stat + matching medium/high finding + total, dimension ip/path/country/asn.\n" +
+              "- action_ratio allow/block: matching stat + matching medium/high finding + total. action_ratio challenge: stat_challenge + total.\n" +
+              "- request_rate: stat_rate + medium/high request_rate finding + context.\n" +
+              "- sample_ua_concentration: stat_ua + medium/high UA finding. sample_observed: exactly one sample.\n" +
+              "- insufficient_data with dimension none uses no evidence when dataSufficient or riskAssessable is false, or there is no supported attack hypothesis under the Bot rules above.\n" +
+              "Recommendation rules:\n" +
+              "- review_source: exactly one nonzero aggregate IP, country, or ASN. review_target: exactly one nonzero aggregate path or host.\n" +
+              "- review_waf: stat_allow + medium/high allow finding + total. verify_sample: exactly one sample or stat_ua. manual_dashboard: context.\n" +
+              "Return exactly one JSON object matching the supplied schema, with no Markdown or extra fields.",
           },
-          { role: "user", content: JSON.stringify(input) },
+          { role: "user", content: JSON.stringify(parsedCatalog.data) },
         ],
       }),
       signal: AbortSignal.timeout(this.timeoutMs),
@@ -161,9 +129,7 @@ export class LLMClient {
         envelope = CompletionResponseSchema.parse(await response.json());
       } catch {
         throw new AppError("llm_response_invalid", "llm_response_invalid", false, undefined, {
-          externalService: "llm",
-          failureKind: "invalid_response",
-          durationMs: durationMs(),
+          externalService: "llm", failureKind: "invalid_response", durationMs: durationMs(),
         });
       }
       const choice = envelope.choices[0];
@@ -175,7 +141,7 @@ export class LLMClient {
         externalService: "llm" as const,
         failureKind: "invalid_response" as const,
         durationMs: durationMs(),
-        ...(finishReason === undefined ? {} : { finishReason }),
+        ...(finishReason === undefined ? {} : { finishReason: safeFinishReason(finishReason) }),
         refusalPresent,
         ...(content === undefined ? {} : { contentLength: content.length }),
         ...(usage?.completion_tokens === undefined ? {} : { completionTokens: usage.completion_tokens }),
@@ -183,54 +149,43 @@ export class LLMClient {
       };
       if (finishReason === "length") {
         throw new AppError("llm_output_truncated", "llm_output_truncated", false, undefined, {
-          ...diagnostics,
-          validationStage: "finish_reason",
+          ...diagnostics, validationStage: "finish_reason",
         });
       }
       if (refusalPresent) {
         throw new AppError("llm_refused", "llm_refused", false, undefined, {
-          ...diagnostics,
-          validationStage: "refusal",
+          ...diagnostics, validationStage: "refusal",
         });
       }
       if (content === undefined) {
         throw new AppError("llm_response_invalid", "llm_response_invalid", false, undefined, diagnostics);
       }
 
-      let unknownOutput: unknown;
+      let output: unknown;
       try {
-        unknownOutput = JSON.parse(content) as unknown;
+        output = JSON.parse(content) as unknown;
       } catch {
         throw new AppError("llm_output_not_json", "llm_output_not_json", false, undefined, {
-          ...diagnostics,
-          validationStage: "parsing",
+          ...diagnostics, validationStage: "parsing", validationReason: "invalid_json",
+          validationPaths: ["root"], issueCount: 1,
         });
       }
-      const parsed = LLMOutputSchema.safeParse(unknownOutput);
+      const parsed = AIAnalysisWireSchema.safeParse(output);
       if (!parsed.success) {
         throw new AppError("llm_output_schema_invalid", "llm_output_schema_invalid", false, undefined, {
           ...diagnostics,
           validationStage: "schema",
-          schemaIssuePaths: issuePaths(parsed.error),
+          validationReason: schemaValidationReason(parsed.error),
+          validationPaths: safeValidationPaths(parsed.error.issues.map((issue) => issue.path)),
+          issueCount: parsed.error.issues.length,
         });
       }
-      try {
-        validateAIAnalysisEvidence(parsed.data, input);
-      } catch (error) {
-        throw new AppError("ai_evidence_invalid", "ai_evidence_invalid", false, undefined, {
-          ...diagnostics,
-          validationStage: "evidence",
-          ...(error instanceof AppError && error.evidenceFailureReason !== undefined
-            ? { evidenceFailureReason: error.evidenceFailureReason }
-            : {}),
-        });
-      }
-      return parsed.data;
+      const analysis = toAIAnalysis(parsed.data);
+      rememberCompletionDiagnostics(analysis, diagnostics);
+      return analysis;
     }
     throw new AppError("llm_unexpected", "llm request failed", true, undefined, {
-      externalService: "llm",
-      failureKind: "unknown",
-      durationMs: durationMs(),
+      externalService: "llm", failureKind: "unknown", durationMs: durationMs(),
     });
   }
 }

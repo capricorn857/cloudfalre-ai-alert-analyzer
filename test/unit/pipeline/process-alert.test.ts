@@ -4,15 +4,9 @@ import { processAlert } from "../../../src/pipeline/process-alert";
 import { queueMessage, rulesConfig, snapshot } from "../../fixtures/domain";
 import type { AIAnalysis } from "../../../src/domain/ai-analysis";
 import { AppError } from "../../../src/observability/errors";
+import { structuredAnalysis } from "../../fixtures/structured-ai";
 
-const analysis: AIAnalysis = {
-  riskLevel: "HIGH",
-  attackType: "Brute Force",
-  confidence: 0.8,
-  summary: "Traffic is concentrated on /api/login.",
-  evidence: ["/api/login = 45%"],
-  recommendations: ["Review rate limiting for /api/login."],
-};
+const analysis: AIAnalysis = structuredAnalysis();
 
 function dependencies(events: string[]) {
   return {

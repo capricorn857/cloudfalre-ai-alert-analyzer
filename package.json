@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:llm:live": "vitest run --config test/live/vitest.config.mjs",
     "deploy": "wrangler deploy --keep-vars"
   },
   "dependencies": {

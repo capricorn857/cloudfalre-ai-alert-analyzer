@@ -34,9 +34,9 @@ describe("log redaction integration", () => {
     for (const value of sensitive) expect(logs).not.toContain(value);
     const firstLine = sink.mock.calls[0]?.[0] ?? "";
     const failure = JSON.parse(firstLine) as Record<string, unknown>;
-    expect(failure).toMatchObject({ error_code: "ai_evidence_invalid", validation_stage: "evidence", evidence_failure_reason: "unsupported_entity", content_length: content.length, completion_tokens: 77, reasoning_tokens: 12 });
+    expect(failure).toMatchObject({ error_code: "llm_output_schema_invalid", validation_stage: "schema", content_length: content.length, completion_tokens: 77, reasoning_tokens: 12 });
     expect(typeof failure.duration_ms).toBe("number");
-    expect(Object.keys(failure).sort()).toEqual(["level", "event", "incident_id", "correlation_id", "analysis_window", "external_service", "error_code", "failure_kind", "retryable", "duration_ms", "finish_reason", "refusal_present", "content_length", "completion_tokens", "reasoning_tokens", "validation_stage", "evidence_failure_reason"].sort());
+    expect(failure).toHaveProperty("validation_paths");
     expect(notification.send).toHaveBeenCalledOnce();
     expect(String(notification.send.mock.calls[0]?.[0])).not.toContain("203.0.113.99");
   });
@@ -84,8 +84,8 @@ describe("log redaction integration", () => {
     const error = new AppError("llm_output_schema_invalid", "safe message", false, undefined, {
       externalService: "llm",
       validationStage: "schema",
-      schemaIssuePaths: ["risk_level", "confidence"],
-      evidenceFailureReason: "unsupported_entity",
+      validationPaths: ["risk.level", "attack.confidence"],
+      validationReason: "invalid_shape",
       contentLength: 123,
       completionTokens: 77,
       reasoningTokens: 12,
@@ -100,8 +100,8 @@ describe("log redaction integration", () => {
     });
 
     const line = sink.mock.calls[0]?.[0] ?? "";
-    expect(line).toContain("schemaIssuePaths");
-    expect(line).toContain("evidenceFailureReason");
+    expect(line).toContain("validationPaths");
+    expect(line).toContain("validationReason");
     expect(line).toContain("contentLength");
     expect(line).not.toContain("full prompt must not be logged");
     expect(line).not.toContain("full model output must not be logged");

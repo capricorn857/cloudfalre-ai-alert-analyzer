@@ -30,4 +30,8 @@ export default tseslint.config(
       "@typescript-eslint/no-explicit-any": "error",
     },
   },
+  {
+    files: ["test/live/vitest.config.mjs"],
+    extends: [tseslint.configs.disableTypeChecked],
+  },
 );

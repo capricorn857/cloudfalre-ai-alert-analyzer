@@ -14,6 +14,7 @@ import {
   type ExternalFailure,
 } from "../observability/errors";
 import { validateFixedWindow } from "./window";
+import type { LocalAnalysisFailure, ValidationDiagnostics } from "../observability/ai-diagnostics";
 
 export interface ProcessAlertDependencies {
   readonly cloudflare: CloudflareAnalyticsClient;
@@ -30,7 +31,22 @@ export interface ProcessResult {
   readonly aiStatus: "available" | "unavailable";
 }
 
-function failureLogContext(failure: ExternalFailure): Record<string, unknown> {
+function validationLogContext(failure: ValidationDiagnostics): Record<string, unknown> {
+  return {
+    ...(failure.validationStage === undefined ? {} : { validation_stage: failure.validationStage }),
+    ...(failure.validationReason === undefined ? {} : { validation_reason: failure.validationReason }),
+    ...(failure.validationPaths === undefined ? {} : { validation_paths: failure.validationPaths }),
+    ...(failure.issueCount === undefined ? {} : { issue_count: failure.issueCount }),
+    ...(failure.referenceCount === undefined ? {} : { reference_count: failure.referenceCount }),
+    ...(failure.catalogEntryCount === undefined ? {} : { catalog_entry_count: failure.catalogEntryCount }),
+  };
+}
+
+function failureLogContext(failure: ExternalFailure | LocalAnalysisFailure): Record<string, unknown> {
+  if ("failureSource" in failure) return {
+    failure_source: failure.failureSource, error_code: failure.errorCode, retryable: false,
+    ...validationLogContext(failure),
+  };
   return {
     external_service: failure.externalService,
     error_code: failure.errorCode,
@@ -52,25 +68,20 @@ function failureLogContext(failure: ExternalFailure): Record<string, unknown> {
     ...(failure.reasoningTokens === undefined
       ? {}
       : { reasoning_tokens: failure.reasoningTokens }),
-    ...(failure.validationStage === undefined
-      ? {}
-      : { validation_stage: failure.validationStage }),
+    ...validationLogContext(failure),
     ...(failure.schemaIssuePaths === undefined
       ? {}
       : { schema_issue_paths: failure.schemaIssuePaths }),
-    ...(failure.evidenceFailureReason === undefined
-      ? {}
-      : { evidence_failure_reason: failure.evidenceFailureReason }),
   };
 }
 
 function logExternalFailure(
   logger: Logger,
   message: QueueMessage,
-  failure: ExternalFailure,
+  failure: ExternalFailure | LocalAnalysisFailure,
 ): void {
   try {
-    logger.warn("external_api_failed", {
+    logger.warn("failureSource" in failure ? "analysis_failed" : "external_api_failed", {
       incident_id: message.incidentId,
       correlation_id: message.correlationId,
       analysis_window: message.analysisWindow,

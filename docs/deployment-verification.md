@@ -67,6 +67,7 @@ npm run lint
 npm test
 npx wrangler deploy --dry-run --keep-vars
 openspec validate implement-waf-alert-analyzer-mvp --strict
+openspec validate structured-evidence-references --strict
 ```
 
 `--keep-vars` 用于保留 Dashboard 中管理的 `LLM_BASE_URL` 和 `LLM_MODEL`。所有命令必须退出码为 0。
@@ -86,6 +87,10 @@ openspec validate implement-waf-alert-analyzer-mvp --strict
 
 ## Dashboard 同窗口核验
 
+结构化引用升级额外核验：响应为 schema_version=2，每条风险/攻击/观察/建议具有独立引用；不存在、重复、类型错误、缺少支持和数据不足确定结论分别有受控错误分类。错误通知仍含原统计和规则。一次正常采集为两次 GraphQL HTTP（聚合和样本）；输出失败时 LLM 一次，企微发送成功时一次，Queue ack、不 retry。仅 LLM 429/5xx 和通知自身临时失败按既有策略重试，不重做采集。
+
+先运行本地 Workers mock 测试；真实 Provider/机器人验证须明确授权和环境范围。已授权的首次 `.env` Provider 烟测中，结构通过 3/3、完整引用支持校验通过 2/3，尚未达到稳定通过门槛，未完成远端部署验证；复测入口为 `npm run test:llm:live`。日志仅检查 code/reason、受控路径及计数，不收集 Prompt、模型原文、实体值或引用 ID。关注 Unknown/降级率与通知成功率，不能把支持校验通过解释为攻击已被证实。
+
 使用通知中的同一个 `analysis_window.start` 与 `analysis_window.end` 核验：
 
 - `total_events`
@@ -98,5 +103,7 @@ openspec validate implement-waf-alert-analyzer-mvp --strict
 记录可解释的采样、聚合或口径差异。
 
 ## 回滚
+
+将 Prompt、Schema、支持规则、Formatter 与诊断整体恢复到同一已验证代码版本。旧 Queue 消息仍兼容，不迁移窗口或 Secret；不能只回滚输出字段或同时保留旧自然语言实体扫描。恢复旧版也会恢复已知误报机制，需记录该风险。
 
 验证失败时部署上一已验证 Worker 版本。不要扩大在途 Queue Message 的固定窗口，不要清空 Queue 或删除远端资源。必要时暂停 Queue consumer，并保留脱敏日志和事件身份标识。

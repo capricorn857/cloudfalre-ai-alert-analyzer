@@ -4,6 +4,7 @@ import { AIAnalysisSchema } from "../../../src/domain/ai-analysis";
 import { FindingSchema } from "../../../src/domain/finding";
 import { IncidentSchema } from "../../../src/domain/incident";
 import { StatisticsSchema } from "../../../src/domain/statistics";
+import { structuredAnalysis } from "../../fixtures/structured-ai";
 
 describe("analysis domain schemas", () => {
   it("accepts a normalized incident without raw responses", () => {
@@ -67,16 +68,9 @@ describe("analysis domain schemas", () => {
       }).level,
     ).toBe("high");
 
-    const analysis = {
-      riskLevel: "HIGH",
-      attackType: "Brute Force",
-      confidence: 0.82,
-      summary: "Traffic is concentrated on the login endpoint.",
-      evidence: ["/api/login = 45%"],
-      recommendations: ["Verify whether the source is expected."],
-    };
+    const analysis = structuredAnalysis();
     expect(AIAnalysisSchema.parse(analysis)).toEqual(analysis);
-    expect(() => AIAnalysisSchema.parse({ ...analysis, confidence: 2 })).toThrow();
+    expect(() => AIAnalysisSchema.parse({ ...analysis, attack: { ...analysis.attack, confidence: 2 } })).toThrow();
     expect(() =>
       AIAnalysisSchema.parse({ ...analysis, recommendations: ["1", "2", "3", "4"] }),
     ).toThrow();

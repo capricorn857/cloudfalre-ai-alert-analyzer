@@ -5,15 +5,9 @@ import { analyzeWafAlert } from "../../../src/analyzers/waf-analyzer";
 import type { AIAnalysis } from "../../../src/domain/ai-analysis";
 import { AppError } from "../../../src/observability/errors";
 import { queueMessage, rulesConfig, snapshot } from "../../fixtures/domain";
+import { structuredAnalysis } from "../../fixtures/structured-ai";
 
-const analysis: AIAnalysis = {
-  riskLevel: "HIGH",
-  attackType: "Brute Force",
-  confidence: 0.82,
-  summary: "Traffic is concentrated on /api/login.",
-  evidence: ["/api/login = 45%"],
-  recommendations: ["Review rate limiting for /api/login."],
-};
+const analysis: AIAnalysis = structuredAnalysis();
 
 describe("runAIAnalysis", () => {
   it("returns an available result for validated model output", async () => {
@@ -24,9 +18,9 @@ describe("runAIAnalysis", () => {
     );
     const analyze = vi.fn().mockResolvedValue(analysis);
 
-    await expect(runAIAnalysis(snapshotResult, { analyze })).resolves.toEqual({
+    await expect(runAIAnalysis(snapshotResult, { analyze })).resolves.toMatchObject({
       status: "available",
-      analysis,
+      analysis: { analysis },
     });
   });
 
@@ -64,24 +58,56 @@ describe("runAIAnalysis", () => {
       rulesConfig,
     );
     const analyze = vi.fn().mockRejectedValue(
-      new AppError("ai_evidence_invalid", "ai_evidence_invalid", false, undefined, {
+      new AppError("ai_reference_invalid", "ai_reference_invalid", false, undefined, {
         externalService: "llm",
         failureKind: "invalid_response",
         durationMs: 19,
-        validationStage: "evidence",
-        evidenceFailureReason: "unsupported_entity",
+        validationStage: "reference",
+        validationReason: "reference_not_found",
       }),
     );
 
     await expect(runAIAnalysis(snapshotResult, { analyze })).resolves.toMatchObject({
       status: "unavailable",
       failure: {
-        errorCode: "ai_evidence_invalid",
-        validationStage: "evidence",
-        evidenceFailureReason: "unsupported_entity",
+        errorCode: "ai_reference_invalid",
+        validationStage: "reference",
+        validationReason: "reference_not_found",
         retryable: false,
       },
     });
+  });
+
+  it("does not trust a replacement client's structurally valid unsupported claim", async () => {
+    const snapshotResult = await analyzeWafAlert(queueMessage, { collectSnapshot: () => Promise.resolve(snapshot) }, rulesConfig);
+    const unsupported = structuredAnalysis();
+    unsupported.attack = { type: "Brute Force", confidence: 0.8, evidenceIds: ["stat:path"] };
+    await expect(runAIAnalysis(snapshotResult, { analyze: () => Promise.resolve(unsupported) })).resolves.toMatchObject({
+      status: "unavailable", failure: { errorCode: "ai_claim_unsupported", retryable: false },
+    });
+  });
+
+  it("isolates invalid catalogs without calling the client or assigning Provider blame", async () => {
+    const snapshotResult = await analyzeWafAlert(queueMessage, { collectSnapshot: () => Promise.resolve(snapshot) }, rulesConfig);
+    if (snapshotResult.status === "collection_failed") throw new Error("fixture");
+    snapshotResult.statistics.totalEvents += 1;
+    const analyze = vi.fn().mockResolvedValue(analysis);
+    const result = await runAIAnalysis(snapshotResult, { analyze });
+    expect(result).toMatchObject({ status: "unavailable", failure: { failureSource: "catalog", errorCode: "ai_catalog_invalid" } });
+    expect(analyze).not.toHaveBeenCalled();
+    if (result.status === "unavailable") expect(result.failure).not.toHaveProperty("externalService");
+  });
+
+  it("does not let a client alter the catalog used for support validation", async () => {
+    const snapshotResult = await analyzeWafAlert(queueMessage, { collectSnapshot: () => Promise.resolve(snapshot) }, rulesConfig);
+    const result = await runAIAnalysis(snapshotResult, { analyze: (catalog) => {
+      catalog.entries = catalog.entries.filter((entry) => entry.type !== "finding");
+      const output = structuredAnalysis();
+      output.risk = { level: "LOW", evidenceIds: ["quality:0", "total:0"] };
+      output.observations = [];
+      return Promise.resolve(output);
+    } });
+    expect(result).toMatchObject({ status: "unavailable", failure: { errorCode: "ai_claim_unsupported" } });
   });
 
   it("does not call the model when Cloudflare collection failed or data is empty", async () => {

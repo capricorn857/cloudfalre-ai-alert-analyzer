@@ -1,4 +1,4 @@
-import type { AIAnalysisInput } from "../analysis/evidence";
+import type { EvidenceCatalog } from "../domain/evidence-catalog";
 import type { CloudflareSnapshot, SnapshotCollectionInput } from "./cloudflare-graphql";
 import type { AIAnalysis } from "../domain/ai-analysis";
 
@@ -7,7 +7,7 @@ export interface CloudflareAnalyticsClient {
 }
 
 export interface AIAnalysisClient {
-  analyze(input: AIAnalysisInput): Promise<AIAnalysis>;
+  analyze(input: EvidenceCatalog): Promise<AIAnalysis>;
 }
 
 export interface NotificationClient {

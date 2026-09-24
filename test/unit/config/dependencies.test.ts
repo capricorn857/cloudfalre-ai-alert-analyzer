@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { calculateStatistics } from "../../../src/analysis/statistics";
 import { normalizeIncident } from "../../../src/analysis/normalizer";
 import { evaluateRules } from "../../../src/analysis/rules";
+import { buildEvidenceCatalog } from "../../../src/analysis/evidence-catalog";
 import { createProcessAlertDependencies } from "../../../src/config/dependencies";
 import { parseEnv } from "../../../src/config/env";
 import { businessConfig, validEnv } from "../../fixtures/config";
@@ -55,7 +56,7 @@ describe("createProcessAlertDependencies", () => {
       analysisWindow: queueMessage.analysisWindow,
       sampleLimit: queueMessage.configSnapshot.sampleLimit,
     });
-    await dependencies.ai.analyze({ incident, statistics, findings });
+    await dependencies.ai.analyze(buildEvidenceCatalog({ incident, statistics, findings }));
     await dependencies.notification.send("test message");
 
     expect(timeout.mock.calls.map(([milliseconds]) => milliseconds)).toEqual([
@@ -109,7 +110,7 @@ describe("createProcessAlertDependencies", () => {
     const dependencies = createProcessAlertDependencies(config);
     let settled = false;
     const result = dependencies.ai
-      .analyze({ incident, statistics, findings })
+      .analyze(buildEvidenceCatalog({ incident, statistics, findings }))
       .then(
         () => ({ status: "resolved" as const }),
         (error: unknown) => ({ status: "rejected" as const, error }),

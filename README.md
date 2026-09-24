@@ -28,6 +28,15 @@ Cloudflare Security Events 通知
 
 ## 前置条件
 
+使用条件之外，AI 当前采用以下结构化证据边界：
+
+- Catalog v1 最多 100 项、128 KiB，从已校验 Incident、Statistics、Findings 派生；AI v2 只返回受控类型和逐条 `evidence_ids`。程序取值并模板渲染，不再从模型自然语言扫描实体，旧版自由文本响应拒绝。
+- 引用须满足角色、必要证据、阈值及样本口径。风险是规则关注等级，CRITICAL 暂无支持规则；攻击类型仅允许符合条件的疑似 Bot，其他情况使用 Unknown。置信度为受限模型自评，不是攻击概率；不能从独立 Top IP/Path 推断联合关系。
+- 诊断使用 `llm_output_schema_invalid`、`ai_reference_invalid`、`ai_reference_type_mismatch`、`ai_claim_unsupported`、`ai_data_insufficient`、`ai_catalog_invalid`，配合受控 `validation_reason`、`validation_paths` 和计数。目录错误属于本地 `analysis_failed`；不记录实体、引用 ID、Prompt 或模型原文。
+- 失败仍发送规则降级，不额外查询、重算统计或重放 Queue。已知正则误报可复现，但不能据旧日志认定它是某次线上失败的唯一原因。首次真实 Provider 烟测结构通过 3/3、完整校验通过 2/3，尚未达到稳定通过门槛，详见[实测记录](docs/llm-model-compatibility.md)。
+
+开发与运行所需条件：
+
 - Node.js `>=22.0.0` 与 npm。
 - 具备配置 Cloudflare Workers、Queues、Workers Builds 与 Variables and Secrets 的权限。
 - 准备最小权限的只读 Cloudflare GraphQL Analytics Token、LLM 中转服务和企业微信机器人。
@@ -57,6 +66,8 @@ npm test
 ```
 
 本地开发可运行 `npm run dev`。开发环境变量使用被 Git 忽略的 `.dev.vars`，只填入本地、虚构或脱敏值；不要把 Secret 写入 Git、文档、夹具或日志。
+
+独立 LLM 实测运行 `npm run test:llm:live`，读取本地 `.env` 的三个 LLM 字段，用虚构数据发起 3 次真实模型调用（可能计费），不查询 Cloudflare、不发送企微。默认 `npm test` 不执行该实测；接口配置、结果与限制见[模型兼容性验证记录](docs/llm-model-compatibility.md)。
 
 ## Workers Builds
 
@@ -153,5 +164,7 @@ npm run deploy
 | Cloudflare Notifications 无法访问 Webhook | 核对路径、方法与上游通知配置；不要以 Cloudflare Access 阻断无入站鉴权的 MVP Webhook。 |
 
 ## 回滚
+
+结构化引用版本须整包切换 Prompt、Schema、支持校验、Formatter 和诊断，不能只回滚一个字段或同时启用新旧校验。Queue Message、bindings 和 Secrets 无需迁移；回滚旧代码会恢复旧正则误报风险。当前变更不授权发布、Secret 写入或云资源操作。
 
 验证失败时部署上一已验证的 Worker 版本。不要清空 Queue、删除远端资源、扩大在途消息的固定窗口或移动重试窗口；保留脱敏日志和事件身份标识以支持排查。必要时先暂停 Queue consumer，并按[部署验证手册](docs/deployment-verification.md)重新执行端到端核验。

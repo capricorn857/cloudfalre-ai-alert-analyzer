@@ -1,14 +1,12 @@
 {
-  "risk_level": "HIGH",
-  "attack_type": "Brute Force",
-  "confidence": 0.82,
-  "summary": "Traffic is concentrated on /api/login from 192.0.2.10.",
-  "evidence": [
-    "192.0.2.10 accounts for 55% of events",
-    "/api/login accounts for 45% of events"
+  "schema_version": 2,
+  "risk": { "level": "HIGH", "evidence_ids": ["quality:0", "finding:allow_ratio", "stat:allow"] },
+  "attack": { "type": "Unknown", "confidence": 0, "evidence_ids": [] },
+  "observations": [
+    { "kind": "aggregate_concentration", "dimension": "path", "evidence_ids": ["stat:path", "finding:path_concentration", "total:0"] }
   ],
   "recommendations": [
-    "Verify whether 192.0.2.10 belongs to expected traffic.",
-    "Review rate limiting for /api/login."
+    { "kind": "review_target", "evidence_ids": ["agg:path:0"] },
+    { "kind": "manual_dashboard", "evidence_ids": ["ctx:0"] }
   ]
 }

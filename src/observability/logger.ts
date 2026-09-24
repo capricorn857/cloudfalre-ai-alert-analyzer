@@ -1,3 +1,5 @@
+import { safeDiagnosticCount, safeDiagnosticPaths, safeDiagnosticReason, safeDiagnosticStage, safeFinishReason } from "./ai-diagnostics";
+
 type LogContext = Record<string, unknown>;
 type LogSink = (line: string) => void;
 
@@ -17,11 +19,6 @@ const sensitiveKey = /authorization|token|api.?key|secret|webhook.?url|prompt|ra
 const sensitiveParameter = /^(?:authorization|token|api[_-]?key|secret|key)$/iu;
 const urlPattern = /https?:\/\/[^\s"'<>]+/giu;
 const sensitiveAssignment = /\b(authorization|token|api[_-]?key|secret|key)=([^\s&]+)/giu;
-const safeEvidenceFailureReasons = new Set([
-  "unsupported_entity",
-  "automatic_action_claim",
-  "insufficient_data",
-]);
 
 function replaceSecrets(value: string, secrets: readonly string[]): string {
   return secrets.reduce(
@@ -63,7 +60,13 @@ function sanitize(
   maximum: number,
   seen: WeakSet<object>,
 ): unknown {
-  if (key === "completion_tokens" || key === "reasoning_tokens") return value;
+  if (["finish_reason", "finishReason"].includes(key)) return safeFinishReason(value);
+  if (["validation_paths", "validationPaths", "schema_issue_paths", "schemaIssuePaths"].includes(key)) return safeDiagnosticPaths(value);
+  if (["validation_reason", "validationReason"].includes(key)) return safeDiagnosticReason(value);
+  if (["validation_stage", "validationStage"].includes(key)) return safeDiagnosticStage(value);
+  if (["refusal_present", "refusalPresent"].includes(key)) return typeof value === "boolean" ? value : undefined;
+  if (["evidence_failure_reason", "evidenceFailureReason"].includes(key)) return undefined;
+  if (["completion_tokens", "reasoning_tokens", "completionTokens", "reasoningTokens", "content_length", "contentLength", "issue_count", "reference_count", "catalog_entry_count", "issueCount", "referenceCount", "catalogEntryCount"].includes(key)) return safeDiagnosticCount(value);
   if (sensitiveKey.test(key)) return "[REDACTED]";
   if (typeof value === "string") {
     return sanitizeString(value, secrets, maximum);
@@ -78,34 +81,39 @@ function sanitize(
       readonly reasoningTokens?: number;
       readonly validationStage?: string;
       readonly schemaIssuePaths?: readonly string[];
-      readonly evidenceFailureReason?: string;
+      readonly validationReason?: string;
+      readonly validationPaths?: readonly string[];
+      readonly issueCount?: number;
+      readonly referenceCount?: number;
+      readonly catalogEntryCount?: number;
     };
     return {
-      name: sanitizeString(value.name, secrets, maximum),
-      message: sanitize(value.message, "message", secrets, maximum, seen),
-      ...(diagnostic.finishReason === undefined ? {} : { finishReason: diagnostic.finishReason }),
+      name: "Error",
+      message: "[REDACTED]",
+      ...(diagnostic.finishReason === undefined ? {} : { finishReason: safeFinishReason(diagnostic.finishReason) }),
       ...(diagnostic.refusalPresent === undefined
         ? {}
-        : { refusalPresent: diagnostic.refusalPresent }),
+        : { refusalPresent: typeof diagnostic.refusalPresent === "boolean" ? diagnostic.refusalPresent : undefined }),
       ...(diagnostic.contentLength === undefined
         ? {}
-        : { contentLength: diagnostic.contentLength }),
+        : { contentLength: safeDiagnosticCount(diagnostic.contentLength) }),
       ...(diagnostic.completionTokens === undefined
         ? {}
-        : { completionTokens: diagnostic.completionTokens }),
+        : { completionTokens: safeDiagnosticCount(diagnostic.completionTokens) }),
       ...(diagnostic.reasoningTokens === undefined
         ? {}
-        : { reasoningTokens: diagnostic.reasoningTokens }),
+        : { reasoningTokens: safeDiagnosticCount(diagnostic.reasoningTokens) }),
       ...(diagnostic.validationStage === undefined
         ? {}
-        : { validationStage: diagnostic.validationStage }),
+        : { validationStage: safeDiagnosticStage(diagnostic.validationStage) }),
       ...(diagnostic.schemaIssuePaths === undefined
         ? {}
-        : { schemaIssuePaths: diagnostic.schemaIssuePaths.slice(0, 20) }),
-      ...(diagnostic.evidenceFailureReason === undefined ||
-      !safeEvidenceFailureReasons.has(diagnostic.evidenceFailureReason)
-        ? {}
-        : { evidenceFailureReason: diagnostic.evidenceFailureReason }),
+        : { schemaIssuePaths: safeDiagnosticPaths(diagnostic.schemaIssuePaths) }),
+      validationReason: safeDiagnosticReason(diagnostic.validationReason),
+      ...(diagnostic.validationPaths === undefined ? {} : { validationPaths: safeDiagnosticPaths(diagnostic.validationPaths) }),
+      ...(diagnostic.issueCount === undefined ? {} : { issueCount: safeDiagnosticCount(diagnostic.issueCount) }),
+      ...(diagnostic.referenceCount === undefined ? {} : { referenceCount: safeDiagnosticCount(diagnostic.referenceCount) }),
+      ...(diagnostic.catalogEntryCount === undefined ? {} : { catalogEntryCount: safeDiagnosticCount(diagnostic.catalogEntryCount) }),
     };
   }
   if (seen.has(value)) return "[CIRCULAR]";
