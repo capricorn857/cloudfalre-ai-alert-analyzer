@@ -1,11 +1,11 @@
 import { CloudflareGraphQLClient } from "../clients/cloudflare-graphql";
 import { LLMClient } from "../clients/llm";
 import { WeComClient } from "../clients/wecom";
-import type { ProcessAlertDependencies } from "../pipeline/process-alert";
+import type { HostProcessAlertDependencies } from "../pipeline/process-alert";
 import { createLogger } from "../observability/logger";
 import type { RuntimeConfig } from "./env";
 
-export function createProcessAlertDependencies(config: RuntimeConfig): ProcessAlertDependencies {
+export function createProcessAlertDependencies(config: RuntimeConfig): HostProcessAlertDependencies {
   return {
     cloudflare: new CloudflareGraphQLClient({
       token: config.cloudflareApiToken,
@@ -16,8 +16,8 @@ export function createProcessAlertDependencies(config: RuntimeConfig): ProcessAl
       baseUrl: config.llmBaseUrl,
       model: config.llmModel,
       apiKey: config.llmApiKey,
-      timeoutMs: config.business.requestTimeoutMs,
-      maxOutputTokens: 800,
+      timeoutMs: config.business.llmTimeoutMs,
+      maxOutputTokens: config.business.llmMaxOutputTokens,
     }),
     notification: new WeComClient({
       webhookUrl: config.wecomWebhookUrl,
@@ -31,7 +31,7 @@ export function createProcessAlertDependencies(config: RuntimeConfig): ProcessAl
     formatterOptions: {
       timeZone: config.business.displayTimeZone,
       maxLength: 3500,
-      topLimit: 5,
+      topLimit: 3,
     },
   };
 }

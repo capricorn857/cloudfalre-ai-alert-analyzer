@@ -25,6 +25,19 @@ export const AggregateGraphQLResponseSchema = z.object({
   }),
 });
 
+export const DiscoveryGraphQLResponseSchema = z.object({
+  data: z.object({ viewer: z.object({ zones: z.array(z.object({
+    total: z.array(z.object({ count: CountSchema })).max(1),
+    topHosts: z.array(group({ clientRequestHTTPHost: z.string().nullable() })).max(10),
+  })).length(1) }) }),
+});
+
+export const HostGraphQLResponseSchema = z.object({
+  data: z.object({ viewer: z.object({ zones: z.array(AggregateZoneSchema.omit({ topHosts: true }).extend({
+    total: z.array(z.object({ count: CountSchema })).max(1),
+  })).length(1) }) }),
+});
+
 const SampleSchema = z.object({
   datetime: z.iso.datetime({ offset: true }),
   action: z.string().min(1),
@@ -34,7 +47,7 @@ const SampleSchema = z.object({
   clientRequestHTTPHost: z.string().min(1).nullable().optional(),
   clientRequestPath: z.string().min(1).nullable().optional(),
   source: z.string().min(1).nullable().optional(),
-  userAgent: z.string().min(1).nullable().optional(),
+  userAgent: z.string().nullable().optional(),
 });
 
 export const SamplesGraphQLResponseSchema = z.object({
@@ -46,7 +59,7 @@ export const SamplesGraphQLResponseSchema = z.object({
 });
 
 const GraphQLErrorEnvelopeSchema = z.object({
-  errors: z.array(z.object({ message: z.string() })).min(1),
+  errors: z.array(z.unknown()).nullish(),
 });
 
 export function parseGraphQLData<T extends z.ZodType>(
@@ -54,7 +67,11 @@ export function parseGraphQLData<T extends z.ZodType>(
   input: unknown,
   durationMs = 0,
 ): z.output<T> {
-  if (GraphQLErrorEnvelopeSchema.safeParse(input).success) {
+  const envelope = GraphQLErrorEnvelopeSchema.safeParse(input);
+  if (!envelope.success) throw new AppError("cloudflare_response_invalid", "cloudflare_response_invalid", false, undefined, {
+    externalService: "cloudflare", failureKind: "invalid_response", durationMs,
+  });
+  if (envelope.data.errors !== undefined && envelope.data.errors !== null && envelope.data.errors.length > 0) {
     throw new AppError("cloudflare_graphql_errors", "cloudflare_graphql_errors", false, undefined, {
       externalService: "cloudflare",
       failureKind: "service_error",

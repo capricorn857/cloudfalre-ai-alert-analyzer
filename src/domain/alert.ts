@@ -2,6 +2,17 @@ import { z } from "zod";
 
 import { UtcDateTimeSchema, ZonedDateTimeSchema } from "./time";
 
+const CLOUDFLARE_WEBHOOK_TEST_MARKER =
+  "This is a test message sent from https://cloudflare.com.";
+
+export const CloudflareWebhookTestPayloadSchema = z.object({
+  text: z.string().refine((value) => value.includes(CLOUDFLARE_WEBHOOK_TEST_MARKER)),
+});
+
+export function isCloudflareWebhookTestPayload(payload: unknown): boolean {
+  return CloudflareWebhookTestPayloadSchema.safeParse(payload).success;
+}
+
 const EventCountSchema = z
   .union([z.number().int().nonnegative(), z.string().regex(/^\d+$/u)])
   .transform((value) => Number(value));
@@ -24,6 +35,17 @@ export const CloudflareAlertPayloadSchema = z
   });
 
 export type CloudflareAlertPayload = z.infer<typeof CloudflareAlertPayloadSchema>;
+
+const MAX_TRACE_ID_BYTES = 128;
+
+export const CloudflareAlertWebhookPayloadSchema = CloudflareAlertPayloadSchema.refine(
+  ({ alert_correlation_id: correlationId }) =>
+    new TextEncoder().encode(correlationId).byteLength <= MAX_TRACE_ID_BYTES,
+  {
+    path: ["alert_correlation_id"],
+    message: "alert_correlation_id must not exceed 128 UTF-8 bytes",
+  },
+);
 
 export const AlertSchema = z.object({
   provider: z.literal("cloudflare"),

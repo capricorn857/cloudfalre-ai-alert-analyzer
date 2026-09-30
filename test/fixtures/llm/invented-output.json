@@ -1,8 +1,7 @@
 {
-  "risk_level": "CRITICAL",
-  "attack_type": "Brute Force",
-  "confidence": 0.99,
-  "summary": "Traffic from 203.0.113.99 targeted /admin.",
-  "evidence": ["203.0.113.99 accounts for 99% of events"],
-  "recommendations": ["Blocked 203.0.113.99 automatically."]
+  "schema_version": 2,
+  "risk": { "level": "HIGH", "evidence_ids": ["quality:0", "finding:not_real", "stat:allow"] },
+  "attack": { "type": "Unknown", "confidence": 0, "evidence_ids": [] },
+  "observations": [],
+  "recommendations": [{ "kind": "manual_dashboard", "evidence_ids": ["ctx:0"] }]
 }

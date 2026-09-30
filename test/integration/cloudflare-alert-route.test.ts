@@ -16,6 +16,14 @@ const payload = {
   alert_correlation_id: "correlation-123",
 };
 
+const officialWebhookTestPayload = {
+  text: "Hello World! This is a test message sent from https://cloudflare.com. If you can see this, your webhook is configured properly.",
+};
+
+const markdownLinkWebhookTestPayload = {
+  text: "Hello World! This is a test message sent from [https://cloudflare.com](https://cloudflare.com). If you can see this, your webhook is configured properly.",
+};
+
 const queueResponse: QueueSendResponse = {
   metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } },
 };
@@ -52,6 +60,46 @@ function createEnv(send: Queue["send"]) {
 const fixedClock = { now: () => new Date("2026-09-14T09:19:00Z") };
 
 describe("Cloudflare alert route", () => {
+  it.each([
+    ["ASCII", "a".repeat(128)],
+    ["multibyte", `${"界".repeat(42)}ab`],
+  ])("accepts a %s correlation ID of exactly 128 UTF-8 bytes", async (_label, correlationId) => {
+    const send = vi.fn<Queue["send"]>().mockResolvedValue(queueResponse);
+    const response = await handleCloudflareAlert(
+      new Request("https://worker.test/api/v1/alerts/cloudflare", {
+        method: "POST",
+        body: JSON.stringify({ ...payload, alert_correlation_id: correlationId }),
+      }),
+      createEnv(send),
+      { clock: fixedClock },
+    );
+
+    expect(response.status).toBe(202);
+    expect(send).toHaveBeenCalledOnce();
+    expect(send.mock.calls[0]?.[0]).toMatchObject({
+      incidentId: correlationId,
+      correlationId,
+    });
+  });
+
+  it.each([
+    ["ASCII", "a".repeat(129)],
+    ["multibyte", `${"界".repeat(42)}abc`],
+  ])("rejects a %s correlation ID over 128 UTF-8 bytes without enqueueing", async (_label, correlationId) => {
+    const send = vi.fn<Queue["send"]>();
+    const response = await handleCloudflareAlert(
+      new Request("https://worker.test/api/v1/alerts/cloudflare", {
+        method: "POST",
+        body: JSON.stringify({ ...payload, alert_correlation_id: correlationId }),
+      }),
+      createEnv(send),
+      { clock: fixedClock },
+    );
+
+    expect(response.status).toBe(400);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("returns 404 for other paths and 405 for other methods", async () => {
     const send = vi.fn<Queue["send"]>();
     const env = createEnv(send);
@@ -93,6 +141,39 @@ describe("Cloudflare alert route", () => {
     expect(
       (
         await handleCloudflareAlert(
+          new Request(url, {
+            method: "POST",
+            body: JSON.stringify(markdownLinkWebhookTestPayload),
+          }),
+          env,
+          { clock: fixedClock },
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await handleCloudflareAlert(
+          new Request(url, { method: "POST", body: JSON.stringify({ text: "hello" }) }),
+          env,
+          { clock: fixedClock },
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await handleCloudflareAlert(
+          new Request(url, {
+            method: "POST",
+            body: JSON.stringify({ text: "ordinary alert text", data: { zone_name: "example.test" } }),
+          }),
+          env,
+          { clock: fixedClock },
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await handleCloudflareAlert(
           new Request(url, { method: "POST", body: JSON.stringify(payload) }),
           env,
           { clock: fixedClock, maxRequestBodyBytes: 10 },
@@ -100,6 +181,29 @@ describe("Cloudflare alert route", () => {
       ).status,
     ).toBe(413);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("accepts the official webhook test without queue or downstream side effects", async () => {
+    const send = vi.fn<Queue["send"]>();
+    const now = vi.fn(() => {
+      throw new Error("the webhook test must not calculate an analysis window");
+    });
+    const outboundFetch = vi.spyOn(globalThis, "fetch");
+
+    const result = await handleCloudflareAlert(
+      new Request("https://worker.test/api/v1/alerts/cloudflare", {
+        method: "POST",
+        body: JSON.stringify(officialWebhookTestPayload),
+      }),
+      { ALERT_QUEUE: { send } },
+      { clock: { now } },
+    );
+
+    expect(result.status).toBe(200);
+    expect(await result.json()).toEqual({ message: "Webhook test accepted" });
+    expect(send).not.toHaveBeenCalled();
+    expect(now).not.toHaveBeenCalled();
+    expect(outboundFetch).not.toHaveBeenCalled();
   });
 
   it("accepts unsupported types without enqueueing", async () => {

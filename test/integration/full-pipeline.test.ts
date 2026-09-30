@@ -77,6 +77,7 @@ describe("full Worker pipeline", () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse(aggregateSuccess))
+      .mockResolvedValueOnce(jsonResponse(aggregateSuccess))
       .mockResolvedValueOnce(jsonResponse(samplesSuccess))
       .mockResolvedValueOnce(
         jsonResponse({ choices: [{ message: { content: JSON.stringify(validOutput) } }] }),
@@ -100,11 +101,11 @@ describe("full Worker pipeline", () => {
       {} as ExecutionContext,
     );
 
-    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    expect(fetchSpy).toHaveBeenCalledTimes(5);
     expect(message.ack).toHaveBeenCalledOnce();
     expect(message.retry).not.toHaveBeenCalled();
     expect(sentMessage).toContain("incident_id: correlation-123");
-    expect(sentMessage).toContain("快照事件数: 400");
+    expect(sentMessage).toContain("快照事件: 400");
   });
 
   it("acks final WeCom failure without replaying GraphQL or AI", async () => {
@@ -119,6 +120,7 @@ describe("full Worker pipeline", () => {
     };
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(aggregateSuccess))
       .mockResolvedValueOnce(jsonResponse(aggregateSuccess))
       .mockResolvedValueOnce(jsonResponse(samplesSuccess))
       .mockResolvedValueOnce(
@@ -139,7 +141,7 @@ describe("full Worker pipeline", () => {
       {} as ExecutionContext,
     );
 
-    expect(fetchSpy).toHaveBeenCalledTimes(5);
+    expect(fetchSpy).toHaveBeenCalledTimes(6);
     expect(message.ack).toHaveBeenCalledOnce();
     expect(message.retry).not.toHaveBeenCalled();
   });

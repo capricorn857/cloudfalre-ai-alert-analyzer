@@ -1,3 +1,5 @@
+import { safeDiagnosticCount, safeDiagnosticPaths, safeDiagnosticReason, safeDiagnosticStage, safeFinishReason, type ValidationDiagnostics } from "./ai-diagnostics";
+
 export type ErrorStage = "input" | "config" | "cloudflare" | "llm" | "wecom" | "queue";
 export type ExternalService = "cloudflare" | "llm" | "wecom";
 export type FailureKind =
@@ -17,15 +19,21 @@ export type ResponseCategory =
   | "api_error"
   | "success";
 
-export interface AppErrorDetails {
+export interface AppErrorDetails extends ValidationDiagnostics {
   readonly externalService?: ExternalService;
   readonly failureKind?: FailureKind;
   readonly durationMs?: number;
   readonly httpStatus?: number;
   readonly responseCategory?: ResponseCategory;
+  readonly finishReason?: string;
+  readonly refusalPresent?: boolean;
+  readonly contentLength?: number;
+  readonly completionTokens?: number;
+  readonly reasoningTokens?: number;
+  readonly schemaIssuePaths?: readonly string[];
 }
 
-export interface ExternalFailure {
+export interface ExternalFailure extends ValidationDiagnostics {
   readonly externalService: ExternalService;
   readonly errorCode: string;
   readonly failureKind: FailureKind;
@@ -33,6 +41,12 @@ export interface ExternalFailure {
   readonly durationMs: number;
   readonly httpStatus?: number;
   readonly responseCategory?: ResponseCategory;
+  readonly finishReason?: string;
+  readonly refusalPresent?: boolean;
+  readonly contentLength?: number;
+  readonly completionTokens?: number;
+  readonly reasoningTokens?: number;
+  readonly schemaIssuePaths?: readonly string[];
 }
 
 export class AppError extends Error {
@@ -44,6 +58,18 @@ export class AppError extends Error {
   readonly durationMs: number | undefined;
   readonly httpStatus: number | undefined;
   readonly responseCategory: ResponseCategory | undefined;
+  readonly finishReason: string | undefined;
+  readonly refusalPresent: boolean | undefined;
+  readonly contentLength: number | undefined;
+  readonly completionTokens: number | undefined;
+  readonly reasoningTokens: number | undefined;
+  readonly validationStage: AppErrorDetails["validationStage"];
+  readonly schemaIssuePaths: readonly string[] | undefined;
+  readonly validationReason: ValidationDiagnostics["validationReason"];
+  readonly validationPaths: readonly string[] | undefined;
+  readonly issueCount: number | undefined;
+  readonly referenceCount: number | undefined;
+  readonly catalogEntryCount: number | undefined;
 
   constructor(
     code: string,
@@ -62,6 +88,18 @@ export class AppError extends Error {
     this.durationMs = details.durationMs;
     this.httpStatus = details.httpStatus ?? status;
     this.responseCategory = details.responseCategory;
+    this.finishReason = details.finishReason === undefined ? undefined : safeFinishReason(details.finishReason);
+    this.refusalPresent = details.refusalPresent;
+    this.contentLength = details.contentLength;
+    this.completionTokens = details.completionTokens;
+    this.reasoningTokens = details.reasoningTokens;
+    this.validationStage = safeDiagnosticStage(details.validationStage);
+    this.schemaIssuePaths = details.schemaIssuePaths === undefined ? undefined : safeDiagnosticPaths(details.schemaIssuePaths);
+    this.validationReason = safeDiagnosticReason(details.validationReason);
+    this.validationPaths = details.validationPaths === undefined ? undefined : safeDiagnosticPaths(details.validationPaths);
+    this.issueCount = details.issueCount === undefined ? undefined : safeDiagnosticCount(details.issueCount);
+    this.referenceCount = details.referenceCount === undefined ? undefined : safeDiagnosticCount(details.referenceCount);
+    this.catalogEntryCount = details.catalogEntryCount === undefined ? undefined : safeDiagnosticCount(details.catalogEntryCount);
   }
 }
 
@@ -166,5 +204,27 @@ export function toExternalFailure(
     ...(classified.responseCategory === undefined
       ? {}
       : { responseCategory: classified.responseCategory }),
+    ...(classified.finishReason === undefined ? {} : { finishReason: classified.finishReason }),
+    ...(classified.refusalPresent === undefined
+      ? {}
+      : { refusalPresent: classified.refusalPresent }),
+    ...(classified.contentLength === undefined ? {} : { contentLength: classified.contentLength }),
+    ...(classified.completionTokens === undefined
+      ? {}
+      : { completionTokens: classified.completionTokens }),
+    ...(classified.reasoningTokens === undefined
+      ? {}
+      : { reasoningTokens: classified.reasoningTokens }),
+    ...(classified.validationStage === undefined
+      ? {}
+      : { validationStage: classified.validationStage }),
+    ...(classified.schemaIssuePaths === undefined
+      ? {}
+      : { schemaIssuePaths: classified.schemaIssuePaths }),
+    ...(classified.validationReason === undefined ? {} : { validationReason: classified.validationReason }),
+    ...(classified.validationPaths === undefined ? {} : { validationPaths: classified.validationPaths }),
+    ...(classified.issueCount === undefined ? {} : { issueCount: classified.issueCount }),
+    ...(classified.referenceCount === undefined ? {} : { referenceCount: classified.referenceCount }),
+    ...(classified.catalogEntryCount === undefined ? {} : { catalogEntryCount: classified.catalogEntryCount }),
   };
 }

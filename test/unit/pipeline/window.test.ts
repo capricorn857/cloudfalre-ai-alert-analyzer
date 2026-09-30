@@ -30,12 +30,13 @@ describe("fixed analysis window", () => {
       end: "2026-09-14T09:20:00.000Z",
     });
     expect(message.incidentId).toBe("correlation-123");
+    expect(message.configSnapshot.hostLimit).toBe(3);
   });
 
   it("uses configured values and validates without mutating the message", () => {
     const message = buildQueueMessage(
       payload,
-      { beforeMinutes: 15, settleSeconds: 120, sampleLimit: 10 },
+      { beforeMinutes: 15, settleSeconds: 120, sampleLimit: 10, hostLimit: 5 },
       new Date("2026-09-14T09:19:00Z"),
     );
     const before = structuredClone(message);
@@ -45,6 +46,7 @@ describe("fixed analysis window", () => {
     expect(message).toEqual(before);
     expect(message.analysisWindow.start).toBe("2026-09-14T09:03:46.000Z");
     expect(message.queryStartedAt).toBe("2026-09-14T09:21:00.000Z");
+    expect(message.configSnapshot.hostLimit).toBe(5);
   });
 
   it("rejects a message whose fixed end was changed", () => {

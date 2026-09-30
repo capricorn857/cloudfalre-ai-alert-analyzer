@@ -1,0 +1,3 @@
+schema: spec-driven
+created: 2026-09-22
+goal: 提升 LLM 调用速度、稳定性与失败定位能力，同时保持固定快照、规则降级和通知边界不变

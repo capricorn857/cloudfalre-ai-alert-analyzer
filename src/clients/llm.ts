@@ -1,46 +1,22 @@
 import { z } from "zod";
 
-import { validateAIAnalysisEvidence, type AIAnalysisInput } from "../analysis/evidence";
-import { AIAnalysisSchema, type AIAnalysis } from "../domain/ai-analysis";
+import { MultiHostAIWireSchema, parseMultiHostAIOutput, type MultiHostAIResponse } from "../domain/ai-analysis";
+import { HostEvidenceCatalogSchema, type HostEvidenceCatalog } from "../domain/host-evidence";
+import { rememberCompletionDiagnostics, safeFinishReason } from "../observability/ai-diagnostics";
 import { AppError, classifyHttpError, classifyUnknownError } from "../observability/errors";
-
-const LLMOutputSchema = z
-  .object({
-    risk_level: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]),
-    attack_type: z.enum([
-      "Scanning",
-      "Brute Force",
-      "Credential Stuffing",
-      "API Abuse",
-      "Bot",
-      "Vulnerability Scanning",
-      "Unknown",
-    ]),
-    confidence: z.number().min(0).max(1),
-    summary: z.string().min(1).max(1000),
-    evidence: z.array(z.string().min(1).max(500)).max(10),
-    recommendations: z.array(z.string().min(1).max(500)).max(3),
-  })
-  .transform((output) =>
-    AIAnalysisSchema.parse({
-      riskLevel: output.risk_level,
-      attackType: output.attack_type,
-      confidence: output.confidence,
-      summary: output.summary,
-      evidence: output.evidence,
-      recommendations: output.recommendations,
-    }),
-  );
+import { workerFetch } from "./fetch";
 
 const CompletionResponseSchema = z.object({
-  choices: z
-    .array(
-      z.object({
-        message: z.object({ content: z.string().min(1) }),
-      }),
-    )
-    .min(1),
+  choices: z.array(z.object({
+    finish_reason: z.string().optional(),
+    message: z.object({ content: z.string().optional(), refusal: z.string().nullable().optional() }),
+  })).min(1),
+  usage: z.object({
+    completion_tokens: z.number().int().nonnegative().optional(),
+    reasoning_tokens: z.number().int().nonnegative().optional(),
+  }).optional(),
 });
+type CompletionResponse = z.infer<typeof CompletionResponseSchema>;
 
 export interface LLMClientOptions {
   readonly baseUrl: string;
@@ -63,107 +39,174 @@ export class LLMClient {
     this.endpoint = `${options.baseUrl.replace(/\/$/u, "")}/chat/completions`;
     this.model = options.model;
     this.apiKey = options.apiKey;
-    this.fetchFn = options.fetchFn ?? fetch;
+    this.fetchFn = options.fetchFn ?? workerFetch;
     this.timeoutMs = options.timeoutMs;
     this.maxOutputTokens = options.maxOutputTokens;
   }
 
-  async analyze(input: AIAnalysisInput): Promise<AIAnalysis> {
+  async analyzeHosts(input: HostEvidenceCatalog): Promise<MultiHostAIResponse> {
     const startedAt = Date.now();
     const durationMs = () => Date.now() - startedAt;
-    let response: Response;
-    try {
-      response = await this.fetchFn(this.endpoint, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${this.apiKey}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model: this.model,
-          max_completion_tokens: this.maxOutputTokens,
-          response_format: {
-            type: "json_schema",
-            json_schema: {
-              name: "cloudflare_security_analysis",
-              strict: true,
-              schema: {
-                type: "object",
-                additionalProperties: false,
-                required: [
-                  "risk_level",
-                  "attack_type",
-                  "confidence",
-                  "summary",
-                  "evidence",
-                  "recommendations",
-                ],
-              },
-            },
+    const parsedCatalog = HostEvidenceCatalogSchema.safeParse(input);
+    if (!parsedCatalog.success) {
+      throw new AppError("ai_catalog_invalid", "ai_catalog_invalid", false, undefined, {
+        failureKind: "invalid_response",
+        validationStage: "catalog",
+        validationReason: "invalid_catalog",
+        validationPaths: ["root"],
+        issueCount: parsedCatalog.error.issues.length,
+      });
+    }
+
+    const request = {
+      method: "POST",
+      headers: { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        model: this.model,
+        max_completion_tokens: this.maxOutputTokens,
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "cloudflare_security_analysis",
+            strict: true,
+            schema: z.toJSONSchema(MultiHostAIWireSchema),
           },
-          messages: [
-            {
-              role: "system",
-              content:
-                "Explain only supplied facts. Do not recalculate statistics, invent evidence, or claim that changes were executed. Return JSON only.",
-            },
-            { role: "user", content: JSON.stringify(input) },
-          ],
-        }),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
-    } catch (error) {
-      throw classifyUnknownError(error, "llm", durationMs());
-    }
-    if (!response.ok) throw classifyHttpError("llm", response.status, durationMs());
+        },
+        messages: [
+          {
+            role: "system",
+            content:
+              "Return schema_version 3 with exactly one result per requested hostIds entry. Every reference, total, context, statistic and finding must belong to that same host. Zone evidence cannot support Host claims. Never infer joint ASN/IP/path relationships.\n" +
+              "Analyze only the supplied Evidence Catalog. Do not query Cloudflare, recalculate statistics, invent facts, repeat entity values, add free text, or claim an action was executed.\n" +
+              "Each risk, attack, observation, and recommendation must cite its own evidence_ids. Use only catalog IDs and exactly the roles below; do not add unrelated evidence. Do not infer relationships between aggregate entries. Samples support only one observed event and never aggregate proportions.\n" +
+              "Risk rules:\n" +
+              "- HIGH or MEDIUM risk: quality + one highest-level risk finding + its stat. The level must equal the highest level among ip/path/country/asn/allow/request_rate findings; quality must be riskAssessable.\n" +
+              "- LOW risk: quality + total, only when the risk finding set is empty and quality is riskAssessable. LOW does not mean safe.\n" +
+              "- CRITICAL risk is unsupported. Unknown risk uses no evidence.\n" +
+              "Attack rules:\n" +
+              "- Bot attack only: stat_ua + high UA finding + stat_rate + high rate finding; quality must be riskAssessable, UA denominator >= 10 and confidence > 0 and <= 0.6.\n" +
+              "- All other non-Unknown attack types are unsupported. Unknown attack uses confidence 0 and no evidence.\n" +
+              "Observation rules:\n" +
+              "- aggregate_concentration: matching stat + matching medium/high finding + total, dimension ip/path/country/asn.\n" +
+              "- action_ratio allow/block: matching stat + matching medium/high finding + total. action_ratio challenge: stat_challenge + total.\n" +
+              "- request_rate: stat_rate + medium/high request_rate finding + context.\n" +
+              "- sample_ua_concentration: stat_ua + medium/high UA finding. sample_observed: exactly one sample.\n" +
+              "- insufficient_data with dimension none uses no evidence when dataSufficient or riskAssessable is false, or there is no supported attack hypothesis under the Bot rules above.\n" +
+              "Recommendation rules:\n" +
+              "- review_source: exactly one nonzero aggregate IP, country, or ASN. review_target: exactly one nonzero aggregate path or host.\n" +
+              "- review_waf: stat_allow + medium/high allow finding + total. verify_sample: exactly one sample or stat_ua. manual_dashboard: context.\n" +
+              "Return exactly one JSON object matching the supplied schema, with no Markdown or extra fields.",
+          },
+          { role: "user", content: JSON.stringify(parsedCatalog.data) },
+        ],
+      }),
+      signal: AbortSignal.timeout(this.timeoutMs),
+    } satisfies RequestInit;
 
-    let envelope: z.infer<typeof CompletionResponseSchema>;
-    try {
-      envelope = CompletionResponseSchema.parse(await response.json());
-    } catch {
-      throw new AppError("llm_response_invalid", "llm_response_invalid", false, undefined, {
-        externalService: "llm",
-        failureKind: "invalid_response",
-        durationMs: durationMs(),
-      });
-    }
-    const content = envelope.choices[0]?.message.content;
-    if (content === undefined) {
-      throw new AppError("llm_response_invalid", "llm_response_invalid", false, undefined, {
-        externalService: "llm",
-        failureKind: "invalid_response",
-        durationMs: durationMs(),
-      });
+    {
+      const requestData = JSON.parse(request.body) as { messages: unknown };
+      if (new TextEncoder().encode(JSON.stringify(requestData.messages)).byteLength > 64 * 1024 || new TextEncoder().encode(request.body).byteLength > 96 * 1024) {
+        throw new AppError("ai_input_budget_exceeded", "AI input budget exceeded", false);
+      }
     }
 
-    let unknownOutput: unknown;
-    try {
-      unknownOutput = JSON.parse(content) as unknown;
-    } catch {
-      throw new AppError("llm_output_invalid", "llm_output_invalid", false, undefined, {
-        externalService: "llm",
-        failureKind: "invalid_response",
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      let response: Response;
+      try {
+        response = await this.fetchFn(this.endpoint, request);
+      } catch (error) {
+        throw classifyUnknownError(error, "llm", durationMs());
+      }
+      if (!response.ok) {
+        const error = classifyHttpError("llm", response.status, durationMs());
+        if (error.retryable && attempt === 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 25));
+          continue;
+        }
+        throw error;
+      }
+
+      let envelope: CompletionResponse;
+      try {
+        envelope = CompletionResponseSchema.parse(JSON.parse(await readBoundedResponse(response, request.signal, 128 * 1024)) as unknown);
+      } catch {
+        throw new AppError("llm_response_invalid", "llm_response_invalid", false, undefined, {
+          externalService: "llm", failureKind: "invalid_response", durationMs: durationMs(),
+        });
+      }
+      const choice = envelope.choices[0];
+      const content = choice?.message.content;
+      const finishReason = choice?.finish_reason;
+      const refusalPresent = choice?.message.refusal !== undefined && choice.message.refusal !== null;
+      const usage = envelope.usage;
+      const diagnostics = {
+        externalService: "llm" as const,
+        failureKind: "invalid_response" as const,
         durationMs: durationMs(),
-      });
+        ...(finishReason === undefined ? {} : { finishReason: safeFinishReason(finishReason) }),
+        refusalPresent,
+        ...(content === undefined ? {} : { contentLength: content.length }),
+        ...(usage?.completion_tokens === undefined ? {} : { completionTokens: usage.completion_tokens }),
+        ...(usage?.reasoning_tokens === undefined ? {} : { reasoningTokens: usage.reasoning_tokens }),
+      };
+      if (finishReason === "length") {
+        throw new AppError("llm_output_truncated", "llm_output_truncated", false, undefined, {
+          ...diagnostics, validationStage: "finish_reason",
+        });
+      }
+      if (refusalPresent) {
+        throw new AppError("llm_refused", "llm_refused", false, undefined, {
+          ...diagnostics, validationStage: "refusal",
+        });
+      }
+      if (content === undefined) {
+        throw new AppError("llm_response_invalid", "llm_response_invalid", false, undefined, diagnostics);
+      }
+      if (new TextEncoder().encode(content).byteLength > 32 * 1024) {
+        throw new AppError("llm_output_truncated", "LLM content budget exceeded", false, undefined, diagnostics);
+      }
+
+      let output: unknown;
+      try {
+        output = JSON.parse(content) as unknown;
+      } catch {
+        throw new AppError("llm_output_not_json", "llm_output_not_json", false, undefined, {
+          ...diagnostics, validationStage: "parsing", validationReason: "invalid_json",
+          validationPaths: ["root"], issueCount: 1,
+        });
+      }
+      try {
+        const analysis = parseMultiHostAIOutput(output, parsedCatalog.data.hostIds);
+        rememberCompletionDiagnostics(analysis, diagnostics);
+        return analysis;
+      } catch {
+        throw new AppError("llm_output_schema_invalid", "invalid multi Host output", false, undefined, { ...diagnostics, validationStage: "schema", validationReason: "invalid_shape", validationPaths: ["root"] });
+      }
     }
-    const parsed = LLMOutputSchema.safeParse(unknownOutput);
-    if (!parsed.success) {
-      throw new AppError("llm_output_invalid", "llm_output_invalid", false, undefined, {
-        externalService: "llm",
-        failureKind: "invalid_response",
-        durationMs: durationMs(),
-      });
-    }
-    try {
-      validateAIAnalysisEvidence(parsed.data, input);
-    } catch (error) {
-      if (!(error instanceof AppError)) throw error;
-      throw new AppError(error.code, error.message, error.retryable, error.status, {
-        externalService: "llm",
-        failureKind: "invalid_response",
-        durationMs: durationMs(),
-      });
-    }
-    return parsed.data;
+    throw new AppError("llm_unexpected", "llm request failed", true, undefined, {
+      externalService: "llm", failureKind: "unknown", durationMs: durationMs(),
+    });
   }
+}
+
+async function readBoundedResponse(response: Response, signal: AbortSignal, limit: number): Promise<string> {
+  const reader = response.body?.getReader();
+  if (reader === undefined) throw new Error("empty response body");
+  const decoder = new TextDecoder();
+  let result = "";
+  let size = 0;
+  const abort = () => { void reader.cancel().catch(() => undefined); };
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    signal.throwIfAborted();
+    for (;;) {
+      const chunk = await reader.read();
+      signal.throwIfAborted();
+      if (chunk.done) break;
+      size += chunk.value.byteLength;
+      if (size > limit) { await reader.cancel(); throw new Error("response byte limit"); }
+      result += decoder.decode(chunk.value, { stream: true });
+    }
+    return result + decoder.decode();
+  } finally { signal.removeEventListener("abort", abort); reader.releaseLock(); }
 }

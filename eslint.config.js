@@ -5,6 +5,7 @@ export default tseslint.config(
   {
     ignores: [
       "node_modules/",
+      ".codex/",
       ".wrangler/",
       ".gitnexus/",
       "coverage/",
@@ -28,5 +29,9 @@ export default tseslint.config(
       "@typescript-eslint/consistent-type-imports": "error",
       "@typescript-eslint/no-explicit-any": "error",
     },
+  },
+  {
+    files: ["test/live/vitest.config.mjs", "test/live/alert-simulation.config.mjs"],
+    extends: [tseslint.configs.disableTypeChecked],
   },
 );

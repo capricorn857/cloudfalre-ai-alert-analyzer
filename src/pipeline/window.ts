@@ -6,6 +6,7 @@ export interface WindowConfig {
   readonly beforeMinutes: number;
   readonly settleSeconds: number;
   readonly sampleLimit: number;
+  readonly hostLimit?: number;
 }
 
 export function buildQueueMessage(
@@ -33,7 +34,12 @@ export function buildQueueMessage(
       start: windowStart.toISOString(),
       end: queryStartedAt.toISOString(),
     },
-    configSnapshot: config,
+    configSnapshot: {
+      beforeMinutes: config.beforeMinutes,
+      settleSeconds: config.settleSeconds,
+      sampleLimit: config.sampleLimit,
+      hostLimit: config.hostLimit ?? 3,
+    },
     alert,
   });
 }

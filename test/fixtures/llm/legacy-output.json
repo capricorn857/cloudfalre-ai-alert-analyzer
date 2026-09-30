@@ -1,0 +1,8 @@
+{
+  "risk_level": "HIGH",
+  "attack_type": "Brute Force",
+  "confidence": 0.82,
+  "summary": "Traffic is concentrated on /api/login from 192.0.2.10.",
+  "evidence": ["192.0.2.10 accounts for 55% of events", "/api/login accounts for 45% of events"],
+  "recommendations": ["Verify whether 192.0.2.10 belongs to expected traffic.", "Review rate limiting for /api/login."]
+}

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CloudflareGraphQLClient } from "../../src/clients/cloudflare-graphql";
 import { AppError } from "../../src/observability/errors";
@@ -16,6 +16,10 @@ const input = {
   sampleLimit: 50,
 };
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -29,6 +33,28 @@ function bodyAsString(body: BodyInit | null | undefined): string {
 }
 
 describe("CloudflareGraphQLClient", () => {
+  it("calls the default Workers fetch without an invalid receiver", async () => {
+    let requestCount = 0;
+    const runtimeFetch = vi.fn(function (this: unknown): Promise<Response> {
+      if (this !== undefined) {
+        throw new TypeError("Illegal invocation: function called with incorrect this reference");
+      }
+      requestCount += 1;
+      return Promise.resolve(
+        jsonResponse(requestCount === 1 ? aggregateSuccess : samplesSuccess),
+      );
+    });
+    vi.stubGlobal("fetch", runtimeFetch);
+    const client = new CloudflareGraphQLClient({
+      token: "cf-test-secret",
+      timeoutMs: 1000,
+      retries: 0,
+    });
+
+    await expect(client.discoverZone(input)).resolves.toMatchObject({ zoneTotalEvents: 400 });
+    expect(runtimeFetch).toHaveBeenCalledOnce();
+  });
+
   it("collects aggregates and samples with one immutable window", async () => {
     const fetchFn = vi
       .fn<typeof fetch>()
@@ -41,12 +67,11 @@ describe("CloudflareGraphQLClient", () => {
       retries: 1,
     });
 
-    const snapshot = await client.collectSnapshot(input);
+    const snapshot = await client.discoverZone(input);
 
-    expect(snapshot.totalEvents).toBe(400);
-    expect(snapshot.topIps[0]).toEqual({ value: "192.0.2.10", count: 220 });
-    expect(snapshot.samples).toHaveLength(1);
-    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(snapshot.zoneTotalEvents).toBe(400);
+    expect(snapshot.topHosts[0]).toEqual({ host: "example.test", count: 400 });
+    expect(fetchFn).toHaveBeenCalledOnce();
     for (const call of fetchFn.mock.calls) {
       const request = call[1];
       expect(new Headers(request?.headers).get("authorization")).toBe("Bearer cf-test-secret");
@@ -54,7 +79,7 @@ describe("CloudflareGraphQLClient", () => {
         query: string;
         variables: Record<string, unknown>;
       };
-      expect(body.query).toContain("$zoneTag: String!");
+      expect(body.query).toContain("$zoneTag: string!");
       expect(body.variables).toMatchObject({
         zoneTag: "zone-test",
         start: input.analysisWindow.start,
@@ -75,8 +100,8 @@ describe("CloudflareGraphQLClient", () => {
       retries: 1,
     });
 
-    await expect(client.collectSnapshot(input)).resolves.toMatchObject({ totalEvents: 0 });
-    expect(fetchFn).toHaveBeenCalledTimes(2);
+    await expect(client.discoverZone(input)).resolves.toMatchObject({ zoneTotalEvents: 0 });
+    expect(fetchFn).toHaveBeenCalledOnce();
   });
 
   it("retries 429 with identical variables and stops after success", async () => {
@@ -93,12 +118,12 @@ describe("CloudflareGraphQLClient", () => {
       sleep: () => Promise.resolve(),
     });
 
-    await client.collectSnapshot(input);
+    await client.discoverZone(input);
 
     const firstBody = bodyAsString(fetchFn.mock.calls[0]?.[1]?.body);
     const retryBody = bodyAsString(fetchFn.mock.calls[1]?.[1]?.body);
     expect(retryBody).toBe(firstBody);
-    expect(fetchFn).toHaveBeenCalledTimes(3);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 
   it("does not retry permanent HTTP, GraphQL, or schema errors", async () => {
@@ -116,7 +141,7 @@ describe("CloudflareGraphQLClient", () => {
         sleep: () => Promise.resolve(),
       });
 
-      await expect(client.collectSnapshot(input)).rejects.toBeDefined();
+      await expect(client.discoverZone(input)).rejects.toBeDefined();
       expect(fetchFn).toHaveBeenCalledOnce();
     }
   });
@@ -141,7 +166,7 @@ describe("CloudflareGraphQLClient", () => {
         retries: 0,
       });
 
-      const error = await client.collectSnapshot(input).catch((caught: unknown) => caught);
+      const error = await client.discoverZone(input).catch((caught: unknown) => caught);
 
       expect(error).toBeInstanceOf(AppError);
       expect(error).toMatchObject({
@@ -160,7 +185,7 @@ describe("CloudflareGraphQLClient", () => {
       retries: 0,
     });
 
-    const error = await client.collectSnapshot(input).catch((caught: unknown) => caught);
+    const error = await client.discoverZone(input).catch((caught: unknown) => caught);
 
     expect(error).toMatchObject({
       code: "cloudflare_graphql_errors",

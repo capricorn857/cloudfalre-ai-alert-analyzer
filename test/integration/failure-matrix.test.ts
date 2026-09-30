@@ -3,19 +3,19 @@ import { describe, expect, it, vi } from "vitest";
 import { processAlert } from "../../src/pipeline/process-alert";
 import { AppError } from "../../src/observability/errors";
 import { queueMessage, rulesConfig, snapshot } from "../fixtures/domain";
+import { LLMClient } from "../../src/clients/llm";
+import { calculateStatistics } from "../../src/analysis/statistics";
+import validOutput from "../fixtures/llm/single-host-policy-output.json";
+import { makeHostAIResponse, hostWireFixture } from "../fixtures/host-ai";
+import { hostFromSnapshot } from "../fixtures/host-analysis";
+
+vi.mock("../../src/analysis/statistics", { spy: true });
 
 function baseDependencies() {
   return {
-    cloudflare: { collectSnapshot: vi.fn().mockResolvedValue(snapshot) },
+    cloudflare: { discoverZone: vi.fn().mockResolvedValue({ zoneTotalEvents: snapshot.totalEvents, topHosts: [{ host: "example.test", count: snapshot.totalEvents }] }), collectHostSnapshot: vi.fn().mockResolvedValue(hostFromSnapshot(snapshot)) },
     ai: {
-      analyze: vi.fn().mockResolvedValue({
-        riskLevel: "HIGH",
-        attackType: "Brute Force",
-        confidence: 0.8,
-        summary: "Traffic targets /api/login.",
-        evidence: ["/api/login = 45%"],
-        recommendations: ["Review /api/login rate limiting."],
-      }),
+      analyzeHosts: vi.fn().mockResolvedValue(makeHostAIResponse()),
     },
     notification: { send: vi.fn().mockResolvedValue(undefined) },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -25,9 +25,32 @@ function baseDependencies() {
 }
 
 describe("external dependency failure matrix", () => {
+  it("uses one LLM attempt, one snapshot and one statistics calculation for Evidence fallback", async () => {
+    vi.mocked(calculateStatistics).mockClear();
+    const dependencies = baseDependencies();
+    const fetchFn = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(Response.json({
+      choices: [{ finish_reason: "stop", message: { content: JSON.stringify(hostWireFixture({
+        ...validOutput, attack: { type: "Unknown", confidence: 0, evidence_ids: ["missing:0"] },
+      })) } }],
+      usage: { completion_tokens: 77, reasoning_tokens: 12 },
+    })));
+    const ai = new LLMClient({ baseUrl: "https://llm.example.test/v1", model: "test", apiKey: "test-only", fetchFn, timeoutMs: 1000, maxOutputTokens: 2048 });
+    await expect(processAlert(queueMessage, { ...dependencies, ai })).resolves.toMatchObject({ status: "sent", aiStatus: "unavailable" });
+    expect(fetchFn).toHaveBeenCalledOnce();
+    expect(dependencies.cloudflare.discoverZone).toHaveBeenCalledOnce();
+    expect(calculateStatistics).toHaveBeenCalledOnce();
+    expect(dependencies.notification.send).toHaveBeenCalledOnce();
+    const notification = String(dependencies.notification.send.mock.calls[0]?.[0]);
+    expect(notification).toContain("AI 降级");
+    expect(notification).not.toContain("Evidence sentinel");
+    expect(dependencies.logger.warn).toHaveBeenCalledWith("host_ai_failed", expect.objectContaining({
+      error_code: "ai_reference_invalid", validation_reason: "reference_not_found", retryable: false,
+      finish_reason: "stop", completion_tokens: 77, reasoning_tokens: 12,
+    }));
+  });
   it("does not call AI when Cloudflare collection is exhausted, but still notifies", async () => {
     const dependencies = baseDependencies();
-    dependencies.cloudflare.collectSnapshot.mockRejectedValue(
+    dependencies.cloudflare.discoverZone.mockRejectedValue(
       new AppError("cloudflare_http_retryable", "failed", true, 503, {
         externalService: "cloudflare",
         failureKind: "http",
@@ -41,7 +64,7 @@ describe("external dependency failure matrix", () => {
       snapshotStatus: "collection_failed",
       aiStatus: "unavailable",
     });
-    expect(dependencies.ai.analyze).not.toHaveBeenCalled();
+    expect(dependencies.ai.analyzeHosts).not.toHaveBeenCalled();
     expect(dependencies.notification.send).toHaveBeenCalledOnce();
     expect(dependencies.logger.warn).toHaveBeenCalledWith(
       "external_api_failed",
@@ -58,7 +81,7 @@ describe("external dependency failure matrix", () => {
 
   it("degrades LLM failure and still sends exactly once", async () => {
     const dependencies = baseDependencies();
-    dependencies.ai.analyze.mockRejectedValue(
+    dependencies.ai.analyzeHosts.mockRejectedValue(
       new AppError("llm_timeout", "timeout", true, undefined, {
         externalService: "llm",
         failureKind: "timeout",
@@ -70,7 +93,7 @@ describe("external dependency failure matrix", () => {
       status: "sent",
       aiStatus: "unavailable",
     });
-    expect(dependencies.cloudflare.collectSnapshot).toHaveBeenCalledOnce();
+    expect(dependencies.cloudflare.discoverZone).toHaveBeenCalledOnce();
     expect(dependencies.notification.send).toHaveBeenCalledOnce();
     expect(dependencies.logger.warn).toHaveBeenCalledWith(
       "external_api_failed",
@@ -80,6 +103,64 @@ describe("external dependency failure matrix", () => {
         failure_kind: "timeout",
         retryable: true,
         duration_ms: 42,
+      }),
+    );
+  });
+
+  it("keeps the fallback notification single-shot after a classified LLM output failure", async () => {
+    const dependencies = baseDependencies();
+    dependencies.ai.analyzeHosts.mockRejectedValue(
+      new AppError("llm_output_schema_invalid", "llm_output_schema_invalid", false, undefined, {
+        externalService: "llm",
+        failureKind: "invalid_response",
+        durationMs: 17,
+        validationStage: "schema",
+        validationPaths: ["risk.level", "attack.confidence"],
+      }),
+    );
+
+    await expect(processAlert(queueMessage, dependencies)).resolves.toMatchObject({
+      status: "sent",
+      aiStatus: "unavailable",
+    });
+    expect(dependencies.cloudflare.discoverZone).toHaveBeenCalledOnce();
+    expect(dependencies.notification.send).toHaveBeenCalledOnce();
+    expect(dependencies.logger.warn).toHaveBeenCalledWith(
+      "external_api_failed",
+      expect.objectContaining({
+        error_code: "llm_output_schema_invalid",
+        validation_stage: "schema",
+        validation_paths: ["risk.level", "attack.confidence"],
+      }),
+    );
+  });
+
+  it("keeps Evidence failures non-retryable and logs only the safe reason", async () => {
+    const dependencies = baseDependencies();
+    dependencies.ai.analyzeHosts.mockRejectedValue(
+      new AppError("ai_claim_unsupported", "ai_claim_unsupported", false, undefined, {
+        externalService: "llm",
+        failureKind: "invalid_response",
+        durationMs: 17,
+        validationStage: "support",
+        validationReason: "unsupported_claim_type",
+      }),
+    );
+
+    await expect(processAlert(queueMessage, dependencies)).resolves.toMatchObject({
+      status: "sent",
+      aiStatus: "unavailable",
+    });
+    expect(dependencies.cloudflare.discoverZone).toHaveBeenCalledOnce();
+    expect(dependencies.ai.analyzeHosts).toHaveBeenCalledOnce();
+    expect(dependencies.notification.send).toHaveBeenCalledOnce();
+    expect(dependencies.logger.warn).toHaveBeenCalledWith(
+      "external_api_failed",
+      expect.objectContaining({
+        error_code: "ai_claim_unsupported",
+        validation_stage: "support",
+        validation_reason: "unsupported_claim_type",
+        retryable: false,
       }),
     );
   });
@@ -99,8 +180,8 @@ describe("external dependency failure matrix", () => {
     await expect(processAlert(queueMessage, dependencies)).resolves.toMatchObject({
       status: "notification_failed",
     });
-    expect(dependencies.cloudflare.collectSnapshot).toHaveBeenCalledOnce();
-    expect(dependencies.ai.analyze).toHaveBeenCalledOnce();
+    expect(dependencies.cloudflare.discoverZone).toHaveBeenCalledOnce();
+    expect(dependencies.ai.analyzeHosts).toHaveBeenCalledOnce();
     expect(dependencies.notification.send).toHaveBeenCalledOnce();
     expect(dependencies.logger.error).toHaveBeenCalledWith(
       "notification_failed",

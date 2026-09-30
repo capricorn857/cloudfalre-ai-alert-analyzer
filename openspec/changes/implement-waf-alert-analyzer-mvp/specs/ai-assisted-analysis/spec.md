@@ -57,7 +57,11 @@ AI 建议 SHALL 最多 3 条，并 SHALL 仅描述人工核验或建议性处置
 - **THEN** 系统拒绝该输出并执行 AI 降级
 
 ### Requirement: AI failure isolation
-LLM 超时、网络错误、HTTP 错误、响应解析失败或 Schema 校验失败 MUST NOT 导致告警丢失或整条 Queue Message 因 AI 原因重放。系统 SHALL 使用 Statistics 和 Findings 生成规则降级结果，并明确标记 `AI 分析暂不可用`。
+LLM 单次调用 MUST 使用运行时配置解析后的 `llmTimeoutMs` 作为超时上限。LLM 超时、网络错误、HTTP 错误、响应解析失败或 Schema 校验失败 MUST NOT 导致告警丢失或整条 Queue Message 因 AI 原因重放。系统 SHALL 使用 Statistics 和 Findings 生成规则降级结果，并明确标记 `AI 分析暂不可用`。本配置不增加 LLM 重试，也不改变 `llm_output_invalid` 的结构与 Evidence 校验语义。
+
+#### Scenario: LLM reaches configured timeout
+- **WHEN** LLM 调用在解析后的 `llmTimeoutMs` 内未完成
+- **THEN** 系统记录 `llm_timeout` 并继续规则降级通知，不重试 LLM 或重放 Queue Message
 
 #### Scenario: LLM request fails
 - **WHEN** LLM 调用因任一技术错误失败

@@ -25,7 +25,8 @@ export const QueueMessageSchema = z
     configSnapshot: z.object({
       beforeMinutes: z.number().int().positive(),
       settleSeconds: z.number().int().nonnegative(),
-      sampleLimit: z.number().int().positive(),
+      sampleLimit: z.number().int().min(1).max(100),
+      hostLimit: z.number().int().min(1).max(5).default(3),
     }),
     alert: AlertSchema,
   })

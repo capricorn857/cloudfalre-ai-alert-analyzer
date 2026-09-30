@@ -11,6 +11,11 @@
 - [ ] `WECOM_WEBHOOK_URL` 以 Secret 保存，目标群已确认。
 - [ ] `LLM_BASE_URL` 以 Text 保存，值为中转站 `/v1` 基础地址。
 - [ ] `LLM_MODEL` 以 Text 保存，值为中转站支持的模型标识。
+- [ ] `BUSINESS_CONFIG.llmTimeoutMs` 未配置时默认为 `30000` 毫秒；显式值位于 `1000` 至 `120000`，且只影响 LLM。
+- [ ] `BUSINESS_CONFIG.llmMaxOutputTokens` 未配置时默认为 `2048`；显式值位于 `512` 至 `8192`，且为整数。
+- [ ] `BUSINESS_CONFIG.hostLimit` 默认3、整数1..5并写Queue快照；sampleLimit为每Host上限，默认50/最大100。
+- [ ] Cloudflare GraphQL 和企业微信继续使用 `requestTimeoutMs`，未被 LLM 超时覆盖。
+- [ ] 模型已通过脱敏 `/models` 兼容性验证；Worker 仅使用 `LLM_MODEL`，未硬编码或自动切换模型。
 - [ ] Dashboard 和仓库中不存在第二套 staging/production 配置。
 
 ## 质量门禁
@@ -25,6 +30,14 @@
 - [ ] Credential 扫描未发现真实 Secret。
 
 ## 发布审批
+
+- [ ] Catalog v2 与 AI v3 的采集、Prompt、Schema、支持校验、Formatter、诊断作为同一版本发布；旧响应拒绝，不双跑两套链路。
+- [ ] 已用非生产凭证确认实际Provider支持v3 JSON Schema及1/3/5 Host预算；历史v2结果和本地Mock不能替代此项。
+- [ ] GraphQL目标Zone字段/限额与7alias预算已经核验；正常默认7 HTTP，最多2路并发，90秒采集截止。
+- [ ] 多Host四类通知、完整窗口/ID、采集/AI降级状态及2000 UTF-8字节上限通过；跨Host与独立排名联合关系拒绝。
+- [ ] 已确认实际环境隔离条件；当前单环境实现不等于已具备 staging，本变更不自动新增环境或资源。
+- [ ] 已说明 Unknown、规则关注等级及疑似 Bot 的边界；置信度不作为攻击概率。
+- [ ] 回滚整包前一结构化版本，旧Consumer忽略hostLimit并恢复Zone级分析，保留原窗口/ID；不回滚到自然语言实体扫描版本。
 
 - [ ] 发布版本、变更范围、回滚版本和操作人已记录。
 - [ ] Queue 至少一次语义和极端重复通知风险已说明。

@@ -13,9 +13,10 @@ Cloudflare Security Events 通知
   -> POST /api/v1/alerts/cloudflare
   -> Schema 校验、固定分析窗口、延迟写入 Queue
   -> cloudflare-ai-alert-analyzer Queue
-  -> GraphQL 只读快照、统计与规则分析
-  -> 可选 AI 分析或确定性降级
-  -> 企业微信通知
+  -> GraphQL Zone 总量与 Top Host 发现
+  -> 同一固定窗口内按 Host 过滤采集、独立统计与规则
+  -> 一次多 Host AI 分析或按 Host 规则降级
+  -> 单条企业微信通知（2000 UTF-8 字节以内）
 ```
 
 ## 运行边界
@@ -27,6 +28,15 @@ Cloudflare Security Events 通知
 - MVP Webhook 没有入站鉴权。若 Cloudflare Notifications 需要调用该端点，不得以 Cloudflare Access 保护该路由；生产使用前应明确接受公网入口风险并配置流量观测。
 
 ## 前置条件
+
+使用条件之外，AI 当前采用以下结构化证据边界：
+
+- 对外 Catalog v2 按 Zone/Host 标识归属，每 Host 最多64项/10 KiB，整体最多328项/56 KiB；AI v3 返回带 `host_id` 的受控结论与逐条引用。程序取值并模板渲染，跨 Host 引用、旧 v2 响应和自由文本均拒绝。
+- 引用须满足角色、必要证据、阈值及样本口径。风险是规则关注等级，CRITICAL 暂无支持规则；攻击类型仅允许符合条件的疑似 Bot，其他情况使用 Unknown。置信度为受限模型自评，不是攻击概率；不能从独立 Top IP/Path 推断联合关系。
+- 诊断使用 `llm_output_schema_invalid`、`ai_reference_invalid`、`ai_reference_type_mismatch`、`ai_claim_unsupported`、`ai_data_insufficient`、`ai_catalog_invalid`，配合受控 `validation_reason`、`validation_paths` 和计数。目录错误属于本地 `analysis_failed`；不记录实体、引用 ID、Prompt 或模型原文。
+- 单 Host 输出失败只降级该 Host，根结构无效则全部 AI 降级，不额外查询、重算统计或重放 Queue。已有真实 Provider 记录属于旧 v2，不能证明 v3 兼容性；本次未调用真实模型或企微，详见[实测记录](docs/llm-model-compatibility.md)。
+
+开发与运行所需条件：
 
 - Node.js `>=22.0.0` 与 npm。
 - 具备配置 Cloudflare Workers、Queues、Workers Builds 与 Variables and Secrets 的权限。
@@ -58,6 +68,8 @@ npm test
 
 本地开发可运行 `npm run dev`。开发环境变量使用被 Git 忽略的 `.dev.vars`，只填入本地、虚构或脱敏值；不要把 Secret 写入 Git、文档、夹具或日志。
 
+独立 LLM 实测运行 `npm run test:llm:live`，读取本地 `.env` 的三个 LLM 字段，用虚构数据发起 3 次真实模型调用（可能计费），不查询 Cloudflare、不发送企微。默认 `npm test` 不执行该实测；接口配置、结果与限制见[模型兼容性验证记录](docs/llm-model-compatibility.md)。
+
 ## Workers Builds
 
 在 Cloudflare Dashboard 的 Workers Builds 为本仓库配置以下项目：
@@ -87,6 +99,18 @@ npm test
 | `LLM_MODEL` | Text，Dashboard 运行时配置 | 中转服务支持的模型标识。 |
 | `BUSINESS_CONFIG` | Wrangler 管理 | `wrangler.jsonc` 中的业务窗口、采样、超时、重试、显示时区和规则阈值。 |
 | `ALERT_QUEUE` | Queue binding | 连接 producer 与 consumer 的 Queue binding，不填为文本配置。 |
+
+`BUSINESS_CONFIG.llmTimeoutMs` 只控制 LLM 单次调用超时，未配置时默认为 `30000` 毫秒；可显式配置 `1000` 至 `120000` 范围内的整数覆盖默认值。`BUSINESS_CONFIG.llmMaxOutputTokens` 控制 `max_completion_tokens`，默认 `2048`，可显式配置 `512` 至 `8192` 的整数。Cloudflare GraphQL 和企业微信继续使用 `requestTimeoutMs`，不会随 LLM 超时或输出预算一起扩大。LLM 仅对 HTTP `429`/`5xx` 最多内部重试一次；输出校验失败直接进入规则降级。
+
+`BUSINESS_CONFIG.hostLimit` 默认3，整数范围1..5，写入 Queue 的 `configSnapshot`；旧 v1 消息缺此字段时固定使用3，不受消费时配置变化影响。`sampleLimit` 默认50、最多100，现为每 Host 的样本上限。发现最多10个候选，不分页补采；空 Host 不查询、不用 Zone 名补齐。
+
+正常 GraphQL 请求数为 `1+2H`，默认7次，最多两路HTTP并发；采集总截止90秒含响应体和退避，每个操作至多2次技术重试。Host比例以Host总量为分母，UA以该Host非空UA样本数为分母；Zone覆盖只计入完整一致的Host聚合，失败不记零，发现计数不一致时覆盖显示未知。相同Host的独立ASN/IP/Path排名也不构成联合归因。
+
+通知按Zone、Host关注与防护、集中建议、时间覆盖追踪排列。IP/Path默认Top3、Country/ASN默认Top1，预算不足整项省略。新Webhook的关联ID最多128 UTF-8字节；旧Queue仍可读，若完整历史ID导致最小消息不可表示，则记录 `notification_content_unrepresentable` 并ack，不发送丢失追踪信息的替代消息。
+
+普通追踪ID保持原样；控制字符密集的ID若转义后过长，会完整显示为带标签的 `[utf8-base64:...]`（孤立UTF-16代理项使用 `[utf16le-base64:...]`），可无损还原，不截断ID。每个被压缩的Host单独标记“明细已省略”；失败Host的发现阶段计数明确标为未完成分析，不能作为该Host统计分母。
+
+模型切换仍只通过 `LLM_MODEL` 完成。候选模型必须先按[模型兼容性验证记录](docs/llm-model-compatibility.md)使用 Router `/models` 和脱敏固定输入比较，不在 Worker 中自动探测或硬编码模型。
 
 `npm run deploy` 使用 `--keep-vars`，以保留 Dashboard 管理的 `LLM_BASE_URL` 和 `LLM_MODEL`。所有凭证均不得进入 `wrangler.jsonc`、Git、日志、测试夹具或本文档。
 
@@ -144,10 +168,12 @@ npm run deploy
 | 初始构建不能重试 | `seed_repo` 初始构建不能重试；创建新的生产分支提交以触发正常构建。 |
 | Wrangler 部署认证异常 | 确认没有将运行时 `CLOUDFLARE_API_TOKEN` 设置为 Builds variable。 |
 | 配置校验失败 | 在 Worker Settings > Variables and Secrets 核对三个 Secret、两个 Text 变量和 `ALERT_QUEUE` binding；确认 `BUSINESS_CONFIG` 符合 `wrangler.jsonc`。 |
-| 未收到 AI 结论 | 查看脱敏日志；LLM 失败时预期会发送确定性规则降级通知。 |
+| 未收到 AI 结论 | 查看脱敏日志的 `error_code` 和 `duration_ms`；`llm_timeout` 可在 `BUSINESS_CONFIG.llmTimeoutMs` 的 `1000` 至 `120000` 范围内调整，其他 LLM 失败仍按确定性规则降级。 |
 | 收到重复通知 | Queue 是至少一次投递；使用通知中的 `incident_id` 和 `correlation_id` 比对重复消息。 |
 | Cloudflare Notifications 无法访问 Webhook | 核对路径、方法与上游通知配置；不要以 Cloudflare Access 阻断无入站鉴权的 MVP Webhook。 |
 
 ## 回滚
+
+Host版本须整包切换采集、Catalog v2、AI v3、Prompt、支持校验、Formatter和诊断。Queue仍为v1，旧Consumer会忽略hostLimit并恢复Zone级分析；回滚到前一结构化证据版本将失去Host分组并恢复旧通知缺陷。不要回滚到自然语言实体扫描版本。无需清空Queue或迁移Secret；至少一次投递下仍可能跨版本重复通知。当前变更不授权发布、Secret写入或云资源操作。
 
 验证失败时部署上一已验证的 Worker 版本。不要清空 Queue、删除远端资源、扩大在途消息的固定窗口或移动重试窗口；保留脱敏日志和事件身份标识以支持排查。必要时先暂停 Queue consumer，并按[部署验证手册](docs/deployment-verification.md)重新执行端到端核验。

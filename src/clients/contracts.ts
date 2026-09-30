@@ -1,13 +1,15 @@
-import type { AIAnalysisInput } from "../analysis/evidence";
-import type { CloudflareSnapshot, SnapshotCollectionInput } from "./cloudflare-graphql";
-import type { AIAnalysis } from "../domain/ai-analysis";
+import type { SnapshotCollectionInput } from "./cloudflare-graphql";
+import type { MultiHostAIResponse } from "../domain/ai-analysis";
+import type { HostEvidenceCatalog } from "../domain/host-evidence";
+import type { SelectedHost, HostCollection, ZoneDiscovery } from "../domain/host-analysis";
 
-export interface CloudflareAnalyticsClient {
-  collectSnapshot(input: SnapshotCollectionInput): Promise<CloudflareSnapshot>;
+export interface HostAnalyticsClient {
+  discoverZone(input: SnapshotCollectionInput): Promise<ZoneDiscovery>;
+  collectHostSnapshot(input: SnapshotCollectionInput, host: SelectedHost): Promise<HostCollection>;
 }
 
-export interface AIAnalysisClient {
-  analyze(input: AIAnalysisInput): Promise<AIAnalysis>;
+export interface HostAIAnalysisClient {
+  analyzeHosts(input: HostEvidenceCatalog): Promise<MultiHostAIResponse>;
 }
 
 export interface NotificationClient {
