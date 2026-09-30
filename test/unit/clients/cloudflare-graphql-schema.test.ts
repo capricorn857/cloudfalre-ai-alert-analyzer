@@ -30,4 +30,10 @@ describe("Cloudflare GraphQL response schemas", () => {
       /cloudflare_response_invalid/u,
     );
   });
+  it.each([{ errors: [{ unexpected: "SENSITIVE" }] }, { errors: ["SENSITIVE"] }])("rejects every nonempty GraphQL errors array", ({ errors }) => {
+    expect(() => parseGraphQLData(AggregateGraphQLResponseSchema, { ...aggregateSuccess, errors })).toThrow(/cloudflare_graphql_errors/u);
+  });
+  it("rejects an invalid errors envelope even when data looks valid", () => {
+    expect(() => parseGraphQLData(AggregateGraphQLResponseSchema, { ...aggregateSuccess, errors: { unexpected: true } })).toThrow(/cloudflare_response_invalid/u);
+  });
 });

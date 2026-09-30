@@ -1,7 +1,7 @@
 import { handleCloudflareAlert } from "./api/cloudflare-alert";
 import { createProcessAlertDependencies } from "./config/dependencies";
 import { parseEnv } from "./config/env";
-import { processAlert } from "./pipeline/process-alert";
+import { processHostAlert } from "./pipeline/process-alert";
 import { handleQueueBatch } from "./pipeline/queue-handler";
 
 const worker: ExportedHandler<CloudflareWorkerEnv> = {
@@ -13,7 +13,7 @@ const worker: ExportedHandler<CloudflareWorkerEnv> = {
     const config = parseEnv(env);
     const dependencies = createProcessAlertDependencies(config);
     await handleQueueBatch(batch, {
-      processMessage: (message) => processAlert(message, dependencies),
+      processMessage: (message) => processHostAlert(message, dependencies),
       clock: { now: () => new Date() },
       logger: dependencies.logger,
     });

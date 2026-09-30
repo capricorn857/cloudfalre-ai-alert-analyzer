@@ -1,7 +1,7 @@
 import { parseEnv } from "../config/env";
 import type { Clock } from "../clients/contracts";
 import {
-  CloudflareAlertPayloadSchema,
+  CloudflareAlertWebhookPayloadSchema,
   isCloudflareWebhookTestPayload,
 } from "../domain/alert";
 import { mapCloudflareAlert } from "../pipeline/dispatcher";
@@ -55,7 +55,7 @@ export async function handleCloudflareAlert(
     return response(200, "Webhook test accepted");
   }
 
-  const payloadResult = CloudflareAlertPayloadSchema.safeParse(unknownPayload);
+  const payloadResult = CloudflareAlertWebhookPayloadSchema.safeParse(unknownPayload);
   if (!payloadResult.success) return response(400, "Invalid Cloudflare alert payload");
   if (mapCloudflareAlert(payloadResult.data) === null) {
     return response(202, "Unsupported alert type ignored");
@@ -68,6 +68,7 @@ export async function handleCloudflareAlert(
       beforeMinutes: env.business.beforeMinutes,
       settleSeconds: env.business.settleSeconds,
       sampleLimit: env.business.sampleLimit,
+      hostLimit: env.business.hostLimit,
     },
     (dependencies.clock ?? systemClock).now(),
   );

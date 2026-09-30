@@ -1,13 +1,12 @@
 import { env } from "cloudflare:workers";
 import { expect, it } from "vitest";
 import { z } from "zod";
-import { buildEvidenceCatalog } from "../../src/analysis/evidence-catalog";
-import { validateAIAnalysisEvidence } from "../../src/analysis/evidence";
+import { validateHostAIAnalysis } from "../../src/analysis/host-evidence";
 import { LLMClient } from "../../src/clients/llm";
 import { getCompletionDiagnostics, type CompletionDiagnostics } from "../../src/observability/ai-diagnostics";
 import { toExternalFailure } from "../../src/observability/errors";
 import { createLogger } from "../../src/observability/logger";
-import { makeEvidenceCatalogInput } from "../fixtures/evidence-catalog";
+import { makeHostCatalog } from "../fixtures/host-ai";
 
 it("supports requests that do not follow redirects", (context) => {
   expect(new Request("https://example.invalid", { redirect: "manual" }).redirect).toBe("manual");
@@ -26,7 +25,7 @@ it("validates three real completions using fictional evidence", async (context) 
   const reports: { status: "passed" | "failed" }[] = [];
 
   for (let run = 1; run <= 3; run++) {
-    const catalog = buildEvidenceCatalog(makeEvidenceCatalogInput());
+    const catalog = makeHostCatalog();
     const httpAttempts: { status: number; headers_ms: number }[] = [];
     const fetchFn: typeof fetch = async (input, init) => {
       const target = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -44,14 +43,16 @@ it("validates three real completions using fictional evidence", async (context) 
     let diagnostics: CompletionDiagnostics | undefined;
     let structureValid = false;
     try {
-      const output = await client.analyze(catalog);
+      const output = await client.analyzeHosts(catalog);
       diagnostics = getCompletionDiagnostics(output);
       structureValid = true;
-      const validated = validateAIAnalysisEvidence(output, catalog);
+      const host = output.hosts[0];
+      if (host?.status !== "valid") throw new Error("live_host_output_invalid");
+      const validated = validateHostAIAnalysis(host.analysis, catalog);
       logger.info("live_llm_result", {
         run, status: "passed", duration_ms: Date.now() - started, http_attempts: httpAttempts,
         structure_valid: true, references_and_support_valid: true,
-        attack_unknown: validated.analysis.attack.type === "Unknown",
+        attack_unknown: validated.wire.attack.type === "Unknown",
         finish_reason: diagnostics?.finishReason,
         completion_tokens: diagnostics?.completionTokens,
         content_length: diagnostics?.contentLength,

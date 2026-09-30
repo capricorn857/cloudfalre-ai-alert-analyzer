@@ -11,7 +11,7 @@ export const queueMessage: QueueMessage = {
     start: "2026-09-14T08:48:46.000Z",
     end: "2026-09-14T09:20:00.000Z",
   },
-  configSnapshot: { beforeMinutes: 30, settleSeconds: 60, sampleLimit: 50 },
+  configSnapshot: { beforeMinutes: 30, settleSeconds: 60, sampleLimit: 50, hostLimit: 3 },
   alert: {
     provider: "cloudflare",
     alertType: "waf_attack",

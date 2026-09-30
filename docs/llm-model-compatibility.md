@@ -22,6 +22,8 @@ npm run test:llm:live -- -t 'supports requests'
 
 ## 首次真实接口结果
 
+以下为历史 Catalog v1 / AI v2 结果，不能作为当前多Host Catalog v2 / AI v3 的兼容性证明。当前v3真实烟测结果见下一节，尚未通过发布门禁。
+
 2026-09-23 实测，2026-09-24 整理记录。用户明确授权读取本地 `.env` 调用当前模型；没有调用 `/models`、Cloudflare 或企业微信，没有写 Secret 或部署。
 
 | 轮次 | HTTP | 总耗时 ms | completion tokens | JSON/Zod 结构 | 引用与支持 |
@@ -34,9 +36,27 @@ npm run test:llm:live -- -t 'supports requests'
 
 首次入口调试中使用了 Workers 不支持的 redirect=error，产生三个毫秒级本地传输失败；经无网络断言确认并改为 redirect=manual 后才得到上述真实 HTTP 结果。本地请求构造失败未混入 Provider 兼容性统计。
 
+## 当前 v3 真实接口结果
+
+2026-09-29，用户授权使用本地 `.env` 实际测试，执行 `npm run test:llm:live`。仅加载三个LLM字段，使用单Host虚构Catalog v2，连续请求3次；未调用Cloudflare、企业微信或部署。首次沙箱内运行因本地端口EPERM未启动测试，获得执行权限后完成真实调用。
+
+| 轮次 | HTTP | 总耗时 ms | completion tokens | 结构及支持校验 |
+| --- | --- | --- | --- | --- |
+| 1 | 200 | 13932 | 661 | 通过，attack Unknown |
+| 2 | 200 | 24405 | 1265 | 正文超预算，解析前拒绝 |
+| 3 | 200 | 15015 | 685 | 通过，attack Unknown |
+
+三轮各一次HTTP请求，finish_reason均为stop。第2轮为 `llm_output_truncated`，源码核对确认触发32 KiB content预算，并非finish_reason=length。诊断content_length=65535已达到计数封顶，不能将其作为精确长度；未保留原文，无法确定正文膨胀的具体内容或上游原因。客户端按现有契约拒绝，无非法输出重试，未放宽预算或支持规则。
+
+完整通过2/3，命令exit 1，未达到3/3烟测门槛。该结果仅覆盖单Host虚构输入；3/5 Host真实兼容性、真实告警采集、企微发送及端到端验收仍未完成，不构成上线依据。
+
+2026-09-29后续按用户指定历史告警窗口进行真实数据模拟：Zone共478事件、发现1个Host、独立聚合478事件及50条样本；Catalog9568 bytes，1次LLM调用通过结构及支持校验，攻击类型Unknown。本轮成功不能覆盖前述2/3失败记录，亦非3/5 Host稳定性证明。细节见 `openspec/changes/host-scoped-alert-analysis/verification.md`；真实数据及通知预览未写入仓库。
+
 ## 固定验证输入
 
-使用虚构 Incident、程序计算的 Statistics/Findings 生成 Catalog v1，输入与 Worker 一致，响应要求 AI v2。可用 `test/fixtures/evidence-catalog.ts` 和 `test/fixtures/llm/valid-output.json` 作为固定样本；旧 `legacy-output.json` 必须被拒绝。请求要求 `response_format.type=json_schema`、`json_schema.strict=true`，Schema 由同一个 `AIAnalysisWireSchema` 导出，并使用待测 `LLM_MODEL`。不要把真实告警、凭证、完整 Prompt 或完整响应写入记录。
+当前使用 `test/fixtures/host-ai.ts` 与 `test/fixtures/host-analysis.ts` 的虚构Host分析生成Catalog v2，响应要求AI v3。旧自由文本及v2响应均拒绝。请求要求 `response_format.type=json_schema`、`json_schema.strict=true`，Schema由 `MultiHostAIWireSchema` 导出。每Host至多3条观察、2条建议；默认输出预算仍2048 tokens，最多5Host时截断会整体降级，不另开模型请求。目录56 KiB、messages64 KiB、请求体96 KiB、响应体128 KiB、content32 KiB均有硬限制。
+
+后续获授权的真实验证应分别覆盖单Host、默认3Host、最大5Host、局部无效输出和根结构无效。记录逐Host支持成功率、Unknown/降级率及截断率，不仅看HTTP200。不要把真实告警、凭证、Prompt或模型原文写入记录。
 
 普通自动化测试只验证请求构造和 mock 响应；上述独立真实接口烟测使用已授权的本地配置。扩展到其他模型或环境的探测仍需明确范围，不发送生产企业微信。必须区分结构通过与引用/支持通过；不能以降低 Unknown 为由放宽支持约束。
 
@@ -65,4 +85,4 @@ npm run test:llm:live -- -t 'supports requests'
 
 验证不会修改 `LLM_MODEL`，也不会自动部署。确认切换后仅由授权人员更新现有 `LLM_MODEL` 配置，并按发布清单执行回滚准备。
 
-契约升级失败时回滚整包 Worker 版本，不能单独保留旧 Prompt 或旧正则验证器；旧版误报风险随回滚恢复。v2 仅验证程序规定的证据支持条件，不证明模型全部语义判断正确。
+契约升级失败时回滚整包Worker版本，不能单独保留旧Prompt或旧验证器；回滚前一版本恢复Zone级分析和旧通知布局。v3仅验证程序规定的支持条件与Host归属，不证明攻击意图或模型所有语义判断正确。

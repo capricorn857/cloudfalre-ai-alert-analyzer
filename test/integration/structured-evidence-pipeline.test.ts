@@ -6,7 +6,8 @@ import { queueMessage } from "../fixtures/domain";
 import { validEnv } from "../fixtures/config";
 import aggregateSuccess from "../fixtures/graphql/aggregate-success.json";
 import samplesSuccess from "../fixtures/graphql/samples-success.json";
-import validOutput from "../fixtures/llm/valid-output.json";
+import validOutput from "../fixtures/llm/single-host-policy-output.json";
+import { hostWireFixture } from "../fixtures/host-ai";
 
 vi.mock("../../src/analysis/statistics", { spy: true });
 vi.mock("../../src/analysis/rules", { spy: true });
@@ -35,12 +36,14 @@ async function consume(content: string, options: { transientLlm?: boolean; insuf
       counts.graphql++;
       const body = JSON.parse(init.body) as { variables: unknown };
       windows.push(body.variables);
-      return Promise.resolve(Response.json(counts.graphql === 1 ? aggregate : samplesSuccess));
+      return Promise.resolve(Response.json(counts.graphql <= 2 ? aggregate : samplesSuccess));
     }
     if (target.includes("llm.example.test")) {
       counts.llm++;
       if (options.transientLlm && counts.llm === 1) return Promise.resolve(new Response("busy", { status: 429 }));
-      return Promise.resolve(Response.json({ choices: [{ finish_reason: "stop", message: { content } }] }));
+      let wireContent = content;
+      try { wireContent = JSON.stringify(hostWireFixture(JSON.parse(content) as Record<string, unknown>)); } catch { /* Invalid JSON stays invalid. */ }
+      return Promise.resolve(Response.json({ choices: [{ finish_reason: "stop", message: { content: wireContent } }] }));
     }
     if (target.includes("qyapi.weixin.qq.com")) {
       counts.wecom++;
@@ -56,9 +59,9 @@ async function consume(content: string, options: { transientLlm?: boolean; insuf
   const before = structuredClone(body.analysisWindow);
   const message = { body, attempts: 1, ack: vi.fn(), retry: vi.fn() };
   await worker.queue?.({ queue: "test", messages: [message] } as unknown as MessageBatch, validEnv as unknown as CloudflareWorkerEnv, {} as ExecutionContext);
-  expect(counts.graphql).toBe(2);
-  expect(calculateStatistics).toHaveBeenCalledOnce();
-  expect(evaluateRules).toHaveBeenCalledOnce();
+  expect(counts.graphql).toBe(options.empty ? 1 : 3);
+  expect(calculateStatistics).toHaveBeenCalledTimes(options.empty ? 0 : 1);
+  expect(evaluateRules).toHaveBeenCalledTimes(options.empty ? 0 : 1);
   expect(message.ack).toHaveBeenCalledOnce();
   expect(message.retry).not.toHaveBeenCalled();
   expect(body.analysisWindow).toEqual(before);
@@ -78,28 +81,28 @@ describe("structured evidence failure isolation in Workers", () => {
   ];
   it.each(cases)("isolates output %s", async (content, code) => {
     const result = await consume(content);
-    expect(result.counts).toEqual({ graphql: 2, llm: 1, wecom: 1 });
+    expect(result.counts).toEqual({ graphql: 3, llm: 1, wecom: 1 });
     expect(result.logs).toContain(code);
     expect(result.logs).not.toContain("MODEL_SENTINEL");
     expect(result.logs).not.toContain("unknown:sentinel");
-    expect(result.messages[0]).toContain("AI 分析暂不可用");
+    expect(result.messages[0]).toContain("AI 降级");
   });
   it("rejects definite risk with partial statistics", async () => {
     const result = await consume(JSON.stringify(validOutput), { insufficient: true });
     expect(result.logs).toContain("ai_data_insufficient");
-    expect(result.counts).toEqual({ graphql: 2, llm: 1, wecom: 1 });
+    expect(result.counts).toEqual({ graphql: 3, llm: 1, wecom: 1 });
   });
   it.each([{ longContext: true }, { empty: true }])("skips the LLM for local failures or empty data %j", async (options) => {
     const result = await consume(JSON.stringify(validOutput), options);
-    expect(result.counts).toEqual({ graphql: 2, llm: 0, wecom: 1 });
+    expect(result.counts).toEqual({ graphql: "empty" in options ? 1 : 3, llm: 0, wecom: 1 });
     if ("longContext" in options) {
-      expect(result.logs).toContain("analysis_failed");
+      expect(result.logs).toContain("ai_catalog_invalid");
       expect(result.logs).not.toContain('"external_service":"llm"');
     }
   });
   it("keeps transient LLM and send retries within their stages", async () => {
     const result = await consume(JSON.stringify({ ...validOutput, summary: "MODEL_SENTINEL" }), { transientLlm: true, transientSend: true });
-    expect(result.counts).toEqual({ graphql: 2, llm: 2, wecom: 2 });
+    expect(result.counts).toEqual({ graphql: 3, llm: 2, wecom: 2 });
     expect(result.messages[0]).toEqual(result.messages[1]);
   });
 });

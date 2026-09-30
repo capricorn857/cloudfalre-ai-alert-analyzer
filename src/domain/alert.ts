@@ -36,6 +36,17 @@ export const CloudflareAlertPayloadSchema = z
 
 export type CloudflareAlertPayload = z.infer<typeof CloudflareAlertPayloadSchema>;
 
+const MAX_TRACE_ID_BYTES = 128;
+
+export const CloudflareAlertWebhookPayloadSchema = CloudflareAlertPayloadSchema.refine(
+  ({ alert_correlation_id: correlationId }) =>
+    new TextEncoder().encode(correlationId).byteLength <= MAX_TRACE_ID_BYTES,
+  {
+    path: ["alert_correlation_id"],
+    message: "alert_correlation_id must not exceed 128 UTF-8 bytes",
+  },
+);
+
 export const AlertSchema = z.object({
   provider: z.literal("cloudflare"),
   alertType: z.literal("waf_attack"),

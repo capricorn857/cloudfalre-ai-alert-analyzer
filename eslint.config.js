@@ -31,7 +31,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ["test/live/vitest.config.mjs"],
+    files: ["test/live/vitest.config.mjs", "test/live/alert-simulation.config.mjs"],
     extends: [tseslint.configs.disableTypeChecked],
   },
 );

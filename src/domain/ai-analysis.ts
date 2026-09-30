@@ -50,3 +50,28 @@ export const AIUnavailableSchema = z.object({
 
 export type AIAnalysis = z.infer<typeof AIAnalysisSchema>;
 export type AIUnavailable = z.infer<typeof AIUnavailableSchema>;
+
+export const HostAIAnalysisWireSchema = AIAnalysisWireSchema.omit({ schema_version: true }).extend({
+  host_id: z.string().regex(/^h[0-4]$/u),
+  observations: AIAnalysisWireSchema.shape.observations.max(3),
+  recommendations: AIAnalysisWireSchema.shape.recommendations.max(2),
+}).strict();
+export const MultiHostAIWireSchema = z.strictObject({
+  schema_version: z.literal(3),
+  hosts: z.array(HostAIAnalysisWireSchema).min(1).max(5),
+});
+export type HostAIAnalysisWire = z.infer<typeof HostAIAnalysisWireSchema>;
+
+export interface MultiHostAIResponse { hosts: ({ hostId: string; status: "valid"; analysis: HostAIAnalysisWire } | { hostId: string; status: "invalid"; errorCode: string })[] }
+export function parseMultiHostAIOutput(input: unknown, expectedHostIds: readonly string[]): MultiHostAIResponse {
+  const envelope = z.strictObject({ schema_version: z.literal(3), hosts: z.array(z.unknown()).min(1).max(5) }).parse(input);
+  const seen = new Set<string>();
+  return { hosts: envelope.hosts.map((raw) => {
+    const { host_id: hostId } = z.object({ host_id: z.string().regex(/^h[0-4]$/u) }).parse(raw);
+    if (seen.has(hostId) || !expectedHostIds.includes(hostId)) throw new Error("invalid host identity");
+    seen.add(hostId);
+    const parsed = HostAIAnalysisWireSchema.safeParse(raw);
+    return parsed.success ? { hostId, status: "valid" as const, analysis: parsed.data }
+      : { hostId, status: "invalid" as const, errorCode: "llm_output_schema_invalid" };
+  }) };
+}

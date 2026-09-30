@@ -1,8 +1,8 @@
 import { z } from "zod";
 
-import { AIAnalysisWireSchema, toAIAnalysis, type AIAnalysis } from "../domain/ai-analysis";
-import { EvidenceCatalogSchema, type EvidenceCatalog } from "../domain/evidence-catalog";
-import { rememberCompletionDiagnostics, safeFinishReason, safeValidationPaths, type ValidationReason } from "../observability/ai-diagnostics";
+import { MultiHostAIWireSchema, parseMultiHostAIOutput, type MultiHostAIResponse } from "../domain/ai-analysis";
+import { HostEvidenceCatalogSchema, type HostEvidenceCatalog } from "../domain/host-evidence";
+import { rememberCompletionDiagnostics, safeFinishReason } from "../observability/ai-diagnostics";
 import { AppError, classifyHttpError, classifyUnknownError } from "../observability/errors";
 import { workerFetch } from "./fetch";
 
@@ -17,12 +17,6 @@ const CompletionResponseSchema = z.object({
   }).optional(),
 });
 type CompletionResponse = z.infer<typeof CompletionResponseSchema>;
-
-function schemaValidationReason(error: z.ZodError): ValidationReason {
-  if (error.issues.some((issue) => issue.code === "unrecognized_keys")) return "unknown_field";
-  if (error.issues.some((issue) => issue.code === "too_big" || issue.code === "too_small")) return "limit_exceeded";
-  return "invalid_shape";
-}
 
 export interface LLMClientOptions {
   readonly baseUrl: string;
@@ -50,10 +44,10 @@ export class LLMClient {
     this.maxOutputTokens = options.maxOutputTokens;
   }
 
-  async analyze(input: EvidenceCatalog): Promise<AIAnalysis> {
+  async analyzeHosts(input: HostEvidenceCatalog): Promise<MultiHostAIResponse> {
     const startedAt = Date.now();
     const durationMs = () => Date.now() - startedAt;
-    const parsedCatalog = EvidenceCatalogSchema.safeParse(input);
+    const parsedCatalog = HostEvidenceCatalogSchema.safeParse(input);
     if (!parsedCatalog.success) {
       throw new AppError("ai_catalog_invalid", "ai_catalog_invalid", false, undefined, {
         failureKind: "invalid_response",
@@ -75,13 +69,14 @@ export class LLMClient {
           json_schema: {
             name: "cloudflare_security_analysis",
             strict: true,
-            schema: z.toJSONSchema(AIAnalysisWireSchema),
+            schema: z.toJSONSchema(MultiHostAIWireSchema),
           },
         },
         messages: [
           {
             role: "system",
             content:
+              "Return schema_version 3 with exactly one result per requested hostIds entry. Every reference, total, context, statistic and finding must belong to that same host. Zone evidence cannot support Host claims. Never infer joint ASN/IP/path relationships.\n" +
               "Analyze only the supplied Evidence Catalog. Do not query Cloudflare, recalculate statistics, invent facts, repeat entity values, add free text, or claim an action was executed.\n" +
               "Each risk, attack, observation, and recommendation must cite its own evidence_ids. Use only catalog IDs and exactly the roles below; do not add unrelated evidence. Do not infer relationships between aggregate entries. Samples support only one observed event and never aggregate proportions.\n" +
               "Risk rules:\n" +
@@ -108,6 +103,13 @@ export class LLMClient {
       signal: AbortSignal.timeout(this.timeoutMs),
     } satisfies RequestInit;
 
+    {
+      const requestData = JSON.parse(request.body) as { messages: unknown };
+      if (new TextEncoder().encode(JSON.stringify(requestData.messages)).byteLength > 64 * 1024 || new TextEncoder().encode(request.body).byteLength > 96 * 1024) {
+        throw new AppError("ai_input_budget_exceeded", "AI input budget exceeded", false);
+      }
+    }
+
     for (let attempt = 0; attempt < 2; attempt += 1) {
       let response: Response;
       try {
@@ -126,7 +128,7 @@ export class LLMClient {
 
       let envelope: CompletionResponse;
       try {
-        envelope = CompletionResponseSchema.parse(await response.json());
+        envelope = CompletionResponseSchema.parse(JSON.parse(await readBoundedResponse(response, request.signal, 128 * 1024)) as unknown);
       } catch {
         throw new AppError("llm_response_invalid", "llm_response_invalid", false, undefined, {
           externalService: "llm", failureKind: "invalid_response", durationMs: durationMs(),
@@ -160,6 +162,9 @@ export class LLMClient {
       if (content === undefined) {
         throw new AppError("llm_response_invalid", "llm_response_invalid", false, undefined, diagnostics);
       }
+      if (new TextEncoder().encode(content).byteLength > 32 * 1024) {
+        throw new AppError("llm_output_truncated", "LLM content budget exceeded", false, undefined, diagnostics);
+      }
 
       let output: unknown;
       try {
@@ -170,22 +175,38 @@ export class LLMClient {
           validationPaths: ["root"], issueCount: 1,
         });
       }
-      const parsed = AIAnalysisWireSchema.safeParse(output);
-      if (!parsed.success) {
-        throw new AppError("llm_output_schema_invalid", "llm_output_schema_invalid", false, undefined, {
-          ...diagnostics,
-          validationStage: "schema",
-          validationReason: schemaValidationReason(parsed.error),
-          validationPaths: safeValidationPaths(parsed.error.issues.map((issue) => issue.path)),
-          issueCount: parsed.error.issues.length,
-        });
+      try {
+        const analysis = parseMultiHostAIOutput(output, parsedCatalog.data.hostIds);
+        rememberCompletionDiagnostics(analysis, diagnostics);
+        return analysis;
+      } catch {
+        throw new AppError("llm_output_schema_invalid", "invalid multi Host output", false, undefined, { ...diagnostics, validationStage: "schema", validationReason: "invalid_shape", validationPaths: ["root"] });
       }
-      const analysis = toAIAnalysis(parsed.data);
-      rememberCompletionDiagnostics(analysis, diagnostics);
-      return analysis;
     }
     throw new AppError("llm_unexpected", "llm request failed", true, undefined, {
       externalService: "llm", failureKind: "unknown", durationMs: durationMs(),
     });
   }
+}
+
+async function readBoundedResponse(response: Response, signal: AbortSignal, limit: number): Promise<string> {
+  const reader = response.body?.getReader();
+  if (reader === undefined) throw new Error("empty response body");
+  const decoder = new TextDecoder();
+  let result = "";
+  let size = 0;
+  const abort = () => { void reader.cancel().catch(() => undefined); };
+  signal.addEventListener("abort", abort, { once: true });
+  try {
+    signal.throwIfAborted();
+    for (;;) {
+      const chunk = await reader.read();
+      signal.throwIfAborted();
+      if (chunk.done) break;
+      size += chunk.value.byteLength;
+      if (size > limit) { await reader.cancel(); throw new Error("response byte limit"); }
+      result += decoder.decode(chunk.value, { stream: true });
+    }
+    return result + decoder.decode();
+  } finally { signal.removeEventListener("abort", abort); reader.releaseLock(); }
 }

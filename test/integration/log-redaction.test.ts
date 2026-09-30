@@ -5,13 +5,15 @@ import { AppError } from "../../src/observability/errors";
 import { LLMClient } from "../../src/clients/llm";
 import { processAlert } from "../../src/pipeline/process-alert";
 import { queueMessage, rulesConfig, snapshot } from "../fixtures/domain";
-import validOutput from "../fixtures/llm/valid-output.json";
+import validOutput from "../fixtures/llm/single-host-policy-output.json";
+import { hostWireFixture } from "../fixtures/host-ai";
+import { hostFromSnapshot } from "../fixtures/host-analysis";
 
 describe("log redaction integration", () => {
   it("logs only safe diagnostics through the actual Evidence failure and fallback pipeline", async () => {
     const sink = vi.fn<(line: string) => void>();
     const sensitive = ["203.0.113.99", "/private-sentinel", "PROMPT_SENTINEL", "TOKEN_SENTINEL", "Authorization: Bearer AUTH_SENTINEL", "API_KEY_SENTINEL", "https://wecom.example.test/hook?key=WEBHOOK_SENTINEL"];
-    const content = JSON.stringify({ ...validOutput, summary: sensitive.join(" ") });
+    const content = JSON.stringify(hostWireFixture({ ...validOutput, summary: sensitive.join(" ") }));
     let prompt = "";
     const fetchFn = vi.fn<typeof fetch>().mockImplementation((_url, init) => {
       const body = init?.body;
@@ -23,7 +25,7 @@ describe("log redaction integration", () => {
     const ai = new LLMClient({ baseUrl: "https://llm.example.test/v1", model: "test", apiKey: "API_KEY_SENTINEL", fetchFn, timeoutMs: 1000, maxOutputTokens: 2048 });
     const notification = { send: vi.fn().mockResolvedValue(undefined) };
     await processAlert(queueMessage, {
-      cloudflare: { collectSnapshot: vi.fn().mockResolvedValue({ ...snapshot, samples: snapshot.samples.map((sample) => ({ ...sample, userAgent: "PROMPT_SENTINEL" })) }) },
+      cloudflare: { discoverZone: vi.fn().mockResolvedValue({ zoneTotalEvents: snapshot.totalEvents, topHosts: [{ host: "example.test", count: snapshot.totalEvents }] }), collectHostSnapshot: vi.fn().mockResolvedValue(hostFromSnapshot({ ...snapshot, samples: snapshot.samples.map((sample) => ({ ...sample, userAgent: "PROMPT_SENTINEL" })) })) },
       ai, notification, logger: createLogger({ sink }), rulesConfig,
       formatterOptions: { timeZone: "Asia/Shanghai", maxLength: 4000, topLimit: 5 },
     });
@@ -32,7 +34,7 @@ describe("log redaction integration", () => {
     expect(logs).not.toContain(content);
     expect(logs).not.toContain(prompt);
     for (const value of sensitive) expect(logs).not.toContain(value);
-    const firstLine = sink.mock.calls[0]?.[0] ?? "";
+    const firstLine = sink.mock.calls.map(([line]) => line).find((line) => line.includes('"event":"host_ai_failed"')) ?? "";
     const failure = JSON.parse(firstLine) as Record<string, unknown>;
     expect(failure).toMatchObject({ error_code: "llm_output_schema_invalid", validation_stage: "schema", content_length: content.length, completion_tokens: 77, reasoning_tokens: 12 });
     expect(typeof failure.duration_ms).toBe("number");

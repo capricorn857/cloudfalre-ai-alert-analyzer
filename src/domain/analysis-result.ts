@@ -3,6 +3,7 @@ import type { Incident } from "./incident";
 import type { QueueMessage } from "./queue-message";
 import type { Statistics } from "./statistics";
 import type { ExternalFailure } from "../observability/errors";
+import type { HostIncident } from "./host-analysis";
 
 export interface SnapshotAnalysisSuccess {
   readonly status: "success" | "empty";
@@ -20,3 +21,9 @@ export interface SnapshotCollectionFailed {
 }
 
 export type SnapshotAnalysisResult = SnapshotAnalysisSuccess | SnapshotCollectionFailed;
+
+export type HostSnapshotAnalysisResult = ({
+  readonly status: "success" | "partial" | "empty";
+  readonly message: QueueMessage;
+  readonly incident: HostIncident;
+} | SnapshotCollectionFailed) & { collectionMetrics?: { requestCount: number; nodeSelectionCount: number } };

@@ -6,6 +6,7 @@ export const validationReasons = [
   "reference_type_mismatch", "missing_support", "unrelated_reference", "support_condition_failed",
   "unsupported_claim_type", "invalid_unknown", "insufficient_data", "invalid_catalog",
   "inconsistent_source", "catalog_budget_exceeded",
+  "host_mismatch",
 ] as const;
 export type ValidationReason = (typeof validationReasons)[number];
 export type ValidationStage = "finish_reason" | "refusal" | "parsing" | "schema" | "reference" | "support" | "catalog";
@@ -23,6 +24,10 @@ const paths = new Set([
   "attack.confidence", "attack.evidence_ids", "observations", "observations[].kind",
   "observations[].dimension", "observations[].evidence_ids", "recommendations",
   "recommendations[].kind", "recommendations[].evidence_ids",
+  "hosts", "hosts[].host_id", "hosts[].risk.level", "hosts[].risk.evidence_ids",
+  "hosts[].attack.type", "hosts[].attack.confidence", "hosts[].attack.evidence_ids",
+  "hosts[].observations[].kind", "hosts[].observations[].dimension", "hosts[].observations[].evidence_ids",
+  "hosts[].recommendations[].kind", "hosts[].recommendations[].evidence_ids",
 ]);
 
 export function safeValidationPaths(issues: readonly (readonly PropertyKey[])[]): string[] {
@@ -30,7 +35,7 @@ export function safeValidationPaths(issues: readonly (readonly PropertyKey[])[])
     let path = "";
     for (const part of parts) {
       if (typeof part === "number") {
-        if (path === "observations" || path === "recommendations") path += "[]";
+        if (path === "hosts" || path.endsWith("observations") || path.endsWith("recommendations")) path += "[]";
       } else if (typeof part === "string") {
         const field = part === "evidenceIds" ? "evidence_ids" : part === "schemaVersion" ? "schema_version" : part;
         path += `${path === "" ? "" : "."}${field}`;

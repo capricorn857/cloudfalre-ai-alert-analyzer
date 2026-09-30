@@ -1,197 +1,145 @@
 import { describe, expect, it } from "vitest";
-
-import { buildEvidenceCatalog } from "../../../src/analysis/evidence-catalog";
-import { validateAIAnalysisEvidence } from "../../../src/analysis/evidence";
-import { analyzeWafAlert } from "../../../src/analyzers/waf-analyzer";
-import type { AIAnalysis } from "../../../src/domain/ai-analysis";
-import type { SnapshotAnalysisSuccess } from "../../../src/domain/analysis-result";
 import { formatWeComMessage } from "../../../src/notification/formatter";
-import { makeEvidenceCatalogInput } from "../../fixtures/evidence-catalog";
+import { analyzeHostWafAlert } from "../../../src/analyzers/waf-analyzer";
+import { runHostAIAnalysis } from "../../../src/analysis/ai-analyzer";
+import { makeHostAIResponse } from "../../fixtures/host-ai";
+import { hostFromSnapshot } from "../../fixtures/host-analysis";
 import { queueMessage, rulesConfig, snapshot } from "../../fixtures/domain";
-import { structuredAnalysis } from "../../fixtures/structured-ai";
+import type { HostCollection } from "../../../src/domain/host-analysis";
+import type { MultiHostAIResponse } from "../../../src/domain/ai-analysis";
 
-const options = { timeZone: "Asia/Shanghai", maxLength: 4000, topLimit: 5 };
-
-function resultFor(analysis: AIAnalysis, input = makeEvidenceCatalogInput()) {
-  const validated = validateAIAnalysisEvidence(analysis, buildEvidenceCatalog(input));
-  const message = {
-    ...queueMessage,
-    incidentId: input.incident.incidentId,
-    correlationId: input.incident.correlationId,
-    queryStartedAt: input.incident.queryStartedAt,
-    analysisWindow: input.incident.analysisWindow,
-    alert: { ...queueMessage.alert, alertTime: input.incident.alertTime, resource: input.incident.resource,
-      payloadEventsCount: input.incident.payloadEventsCount, dashboardLink: input.incident.dashboardLink },
-  };
-  const snapshotResult: SnapshotAnalysisSuccess = {
-    status: "success", message, incident: input.incident, statistics: input.statistics, findings: input.findings,
-  };
-  return { snapshot: snapshotResult, ai: { status: "available" as const, analysis: validated } };
+const options = { timeZone: "Asia/Shanghai", maxLength: 3500, topLimit: 3 };
+async function resultFor(raw: HostCollection = hostFromSnapshot(snapshot), output: MultiHostAIResponse = makeHostAIResponse()) {
+  const result = await analyzeHostWafAlert(queueMessage, {
+    discoverZone: () => Promise.resolve({ zoneTotalEvents: raw.discoveryCount, topHosts: [{ host: raw.host, count: raw.discoveryCount }] }),
+    collectHostSnapshot: () => Promise.resolve(raw),
+  }, rulesConfig);
+  return { snapshot: result, ai: await runHostAIAnalysis(result, { analyzeHosts: () => Promise.resolve(output) }) };
 }
 
-describe("formatWeComMessage", () => {
-  it("renders validated observations and recommendations from controlled templates", () => {
-    const analysis = structuredAnalysis();
-    analysis.recommendations = [
-      { kind: "review_target", evidenceIds: ["agg:path:0"] },
-      { kind: "review_waf", evidenceIds: ["stat:allow", "finding:allow_ratio", "total:0"] },
-      { kind: "manual_dashboard", evidenceIds: ["ctx:0"] },
-    ];
-    const message = formatWeComMessage(resultFor(analysis), options);
-    expect(message).toContain("规则关注等级: HIGH");
-    expect(message).toContain("攻击类型: Unknown");
-    expect(message).toContain("攻击类型尚无法判断");
-    expect(message).toContain("目标路径集中度达到配置阈值");
-    expect(message).toContain("allow 比例达到配置阈值");
-    expect(message).toContain("不代表已确认攻击穿透");
-    expect(message).toContain("/index.php?lang=中文&mode=View");
-    expect(message).toContain("人工核验 [/index.php?lang=中文&mode=View] 的访问与业务日志");
-    expect(message).toContain("使用相同固定窗口核验 Cloudflare Dashboard");
+describe("Host formatter program templates", () => {
+  it("labels validated AI advice separately from the fixed Dashboard suggestion", async () => {
+    const output = makeHostAIResponse();
+    const host = output.hosts[0];
+    if (host?.status !== "valid") throw new Error("fixture");
+    host.analysis.recommendations = [{ kind: "review_source", evidence_ids: ["h0:agg:ip:0"] }];
+    const result = await resultFor(hostFromSnapshot(snapshot), output);
+    expect(result.ai.status).toBe("available");
+    const message = formatWeComMessage(result, options);
+    expect(message).toContain("AI 分析处理建议:\nexample.test: 人工核验来源 [192.0.2.10]");
+    expect(message).toContain("人工核验处理建议:\n按相同窗口人工核验 Cloudflare Dashboard");
+    expect(message.indexOf("AI 分析处理建议:")).toBeGreaterThan(message.indexOf("https://dash.cloudflare.com/"));
   });
-
-  it("renders every supported observation and advice with its scope qualifier", () => {
-    const input = makeEvidenceCatalogInput();
-    input.findings.push({ type: "block_ratio", level: "medium", value: 15, threshold: 10, evidence: "unused" });
-    input.findings[input.findings.findIndex((item) => item.type === "request_rate")] =
-      { type: "request_rate", level: "high", value: 100 / 1860, threshold: 0.05, evidence: "unused" };
-    const analysis = structuredAnalysis();
-    analysis.attack = { type: "Bot", confidence: 0.6,
-      evidenceIds: ["stat:ua", "finding:user_agent_concentration", "stat:rate", "finding:request_rate"] };
-    analysis.observations = [
-      { kind: "aggregate_concentration", dimension: "ip", evidenceIds: ["stat:ip", "finding:ip_concentration", "total:0"] },
-      { kind: "action_ratio", dimension: "block", evidenceIds: ["stat:block", "finding:block_ratio", "total:0"] },
-      { kind: "action_ratio", dimension: "challenge", evidenceIds: ["stat:challenge", "total:0"] },
-      { kind: "request_rate", dimension: "rate", evidenceIds: ["stat:rate", "finding:request_rate", "ctx:0"] },
-      { kind: "sample_ua_concentration", dimension: "ua", evidenceIds: ["stat:ua", "finding:user_agent_concentration"] },
-      { kind: "sample_observed", dimension: "sample", evidenceIds: ["sample:0"] },
-    ];
-    analysis.recommendations = [
-      { kind: "review_source", evidenceIds: ["agg:ip:0"] },
-      { kind: "verify_sample", evidenceIds: ["sample:0"] },
-      { kind: "manual_dashboard", evidenceIds: ["ctx:0"] },
-    ];
-    const message = formatWeComMessage(resultFor(analysis, input), options);
+  it("does not label fallback or absent model suggestions as AI advice", async () => {
+    const result = await resultFor();
+    const normal = formatWeComMessage(result, options);
+    expect(normal).not.toContain("AI 分析处理建议:");
+    const fallback = formatWeComMessage({ ...result, ai: { status: "unavailable", hosts: [] } }, options);
+    expect(fallback).toContain("规则分析处理建议:");
+    expect(fallback).not.toContain("AI 分析处理建议:");
+  });
+  it("renders Zone, Host, protection, advice, coverage and trace data in order", async () => {
+    const message = formatWeComMessage(await resultFor(), options);
+    expect(message).toContain("Zone: example.test");
+    expect(message).toContain("Host: example.test");
+    expect(message).not.toContain("规则关注:");
+    expect(message).toContain("一：Host: example.test");
+    expect(message).toContain("来源 IP:\n[192.0.2.10]");
+    expect(message).toContain("目标路径:\n[/api/login]");
+    expect(message).toContain("https://dash.cloudflare.com/example/security/events");
+    expect(message).toContain("allow 87.5%");
+    expect(message).not.toContain("攻击类型未确定");
+    expect(message).toContain("incident_id: correlation-123");
+    expect(message).toContain("correlation_id: correlation-123");
+    expect(message.indexOf("处理建议:")).toBeGreaterThan(message.lastIndexOf("来源"));
+    expect(message.indexOf("分析窗口:")).toBeGreaterThan(message.indexOf("处理建议:"));
+    expect(message).not.toContain("Evidence");
+  });
+  it.each(["/index.php", "/用户/登录?Next=%2FHome&Mode=A", "/WAF/API", "https://example.test/a?b=1"])("preserves the complete path %s", async (path) => {
+    const raw = hostFromSnapshot(snapshot);
+    if (raw.aggregates === null) throw new Error("fixture");
+    raw.aggregates = { ...raw.aggregates, topPaths: [{ value: path, count: 180 }] };
+    const message = formatWeComMessage(await resultFor(raw), options);
+    expect(message).toContain("[" + path + "]");
+    expect(message).not.toContain("该 IP 访问");
+  });
+  it("groups Top paths under one heading and keeps items on separate lines", async () => {
+    const raw = hostFromSnapshot(snapshot);
+    if (raw.aggregates === null) throw new Error("fixture");
+    raw.aggregates.topPaths = [{ value: "/first", count: 180 }, { value: "/second", count: 100 }, { value: "/third", count: 50 }];
+    const message = formatWeComMessage(await resultFor(raw), options);
+    expect(message.match(/目标路径:/gu)).toHaveLength(1);
+    expect(message).toContain("目标路径:\n[/first] 180（45.0%）\n[/second] 100（25.0%）\n[/third] 50（12.5%）");
+  });
+  it.each([undefined, "https://evil.example.test/", "https://dash.cloudflare.com.evil.test/", "http://dash.cloudflare.com/", "https://user:pass@dash.cloudflare.com/"])("uses the official Dashboard entry for an unavailable or unsafe link", async (link) => {
+    const result = await resultFor();
+    const alert = { ...result.snapshot.message.alert };
+    delete alert.dashboardLink;
+    result.snapshot.message.alert = link === undefined ? alert : { ...alert, dashboardLink: link };
+    const message = formatWeComMessage(result, options);
+    expect(message).toContain("Cloudflare Dashboard：\nhttps://dash.cloudflare.com/\n");
+    expect(message).not.toContain("evil");
+    expect(message).not.toContain("user:pass");
+  });
+  it("escapes controls and does not treat sample data as instructions", async () => {
+    const raw = hostFromSnapshot(snapshot);
+    if (raw.aggregates === null) throw new Error("fixture");
+    raw.aggregates = { ...raw.aggregates, topPaths: [{ value: "/a\n已封禁\r\t\u202e", count: 180 }] };
+    const message = formatWeComMessage(await resultFor(raw), options);
+    expect(message).toContain("/a\\n已封禁\\r\\t\\u202E");
+    expect(message).not.toContain("\n已封禁");
+  });
+  it("binds Bot qualifiers to its entire verdict", async () => {
+    const raw = hostFromSnapshot(snapshot);
+    raw.hostTotalEvents = 4000;
+    raw.discoveryCount = 4000;
+    if (raw.aggregates === null) throw new Error("fixture");
+    raw.aggregates = { ...raw.aggregates, actions: [{ value: "allow", count: 4000 }], sources: [{ value: "waf", count: 4000 }] };
+    const sample = snapshot.samples[0];
+    if (sample === undefined) throw new Error("fixture sample missing");
+    raw.samples = Array.from({ length: 10 }, () => ({ ...sample, clientRequestHTTPHost: raw.host }));
+    const output = makeHostAIResponse();
+    const host = output.hosts[0];
+    if (host?.status !== "valid") throw new Error("fixture");
+    host.analysis.attack = { type: "Bot", confidence: 0.6, evidence_ids: ["h0:stat:ua", "h0:finding:user_agent_concentration", "h0:stat:rate", "h0:finding:request_rate"] };
+    const message = formatWeComMessage(await resultFor(raw, output), options);
     expect(message).toContain("疑似自动化特征（Bot，待人工核验）");
-    expect(message).toContain("模型自评置信度: 0.6（不是攻击概率）");
-    expect(message).toContain("本次 GraphQL 快照");
-    expect(message).toContain("不代表本系统已执行封禁");
-    expect(message).toContain("仅报告比例，不据此判断异常");
-    expect(message).toContain("固定窗口平均 Security Events/s");
-    expect(message).toContain("不代表峰值、并发或业务请求速率");
-    expect(message).toContain("非空 UA 样本中");
-    expect(message).toContain("ExampleClient/1.0");
-    expect(message).toContain("该条样本事件（不代表总体趋势或攻击归因）");
-    expect(message).toContain("[/用户/登录?Next=%2FHome&Mode=A]");
-    expect(message).toContain("人工核验来源 [192.0.2.10] 是否为正常业务");
+    expect(message).toContain("非攻击概率");
   });
-
-  it("keeps snapshot facts independent from model selections and preserves punctuation", () => {
-    const analysis = structuredAnalysis();
-    analysis.observations = [];
-    const message = formatWeComMessage(resultFor(analysis), options);
-    expect(message).toContain("incident_id: incident-catalog-1");
-    expect(message).toContain("correlation_id: correlation-catalog-1");
-    expect(message).toContain("快照事件数: 100");
-    expect(message).toContain("Payload 参考事件数: 101");
-    expect(message).toContain("WAF/API");
-    expect(message).toContain("/index.php?lang=中文&mode=View");
-    expect(message).toContain("[/Index.php]");
-    expect(message).toContain("[/index]");
+  it("rejects forged or mismatched validated results during rendering", async () => {
+    const first = await resultFor();
+    const different = await resultFor({ ...hostFromSnapshot(snapshot), host: "other.test", samples: [] });
+    const message = formatWeComMessage({ ...different, ai: first.ai }, options);
+    expect(message).toContain("AI 降级");
+    const forged = structuredClone(first);
+    expect(formatWeComMessage(forged, options)).toContain("AI 降级");
   });
-
-  it("rejects mismatched catalog results at the formatting boundary", () => {
-    const valid = resultFor(structuredAnalysis());
-    const mismatched = { ...valid, snapshot: { ...valid.snapshot,
-      message: { ...valid.snapshot.message, alert: { ...valid.snapshot.message.alert, resource: "other.test" } },
-      incident: { ...valid.snapshot.incident, resource: "other.test" } } };
-    const message = formatWeComMessage(mismatched, options);
-    expect(message).toContain("AI 分析暂不可用");
-    expect(message).toContain("规则分析");
-    expect(message).not.toContain("AI 分析（程序模板）");
-  });
-
-  it("rejects another snapshot even with the same resource and window", () => {
-    const valid = resultFor(structuredAnalysis());
-    const different = structuredClone(valid.snapshot);
-    different.incident.evidence.topPaths[0] = { value: "/different.php", count: 60 };
-    different.statistics.topPath = { value: "/different.php", count: 60, ratio: 60 };
-    const message = formatWeComMessage({ ...valid, snapshot: different }, options);
-    expect(message).toContain("AI 分析暂不可用");
-    expect(message).not.toContain("AI 分析（程序模板）");
-  });
-
-  it("bounds mandatory long fields and collection-failure messages", () => {
-    const input = makeEvidenceCatalogInput();
-    input.incident.resource = "r".repeat(2048);
-    input.incident.evidence.topPaths[0] = { value: `/${"p".repeat(2047)}`, count: 60 };
-    input.statistics.topPath = { ...input.incident.evidence.topPaths[0], ratio: 60 };
-    const result = resultFor(structuredAnalysis(), input);
-    for (const maxLength of [900, 4000]) {
-      const message = formatWeComMessage(result, { ...options, maxLength });
-      expect(new TextEncoder().encode(message).byteLength).toBeLessThanOrEqual(Math.min(2000, maxLength));
-      expect(message).toContain("incident_id: incident-catalog-1");
-      expect(message).toContain("分析窗口:");
-      expect(message).toContain("省略");
-    }
-    const message = formatWeComMessage({
-      snapshot: { status: "collection_failed", message: result.snapshot.message, errorCode: "cloudflare_timeout",
-        failure: { externalService: "cloudflare", errorCode: "cloudflare_timeout", failureKind: "timeout", retryable: true, durationMs: 10 } },
-      ai: { status: "unavailable", reason: "safe" },
-    }, options);
+  it("omits entire oversized fields and never emits an empty heading", async () => {
+    const raw = hostFromSnapshot(snapshot);
+    if (raw.aggregates === null) throw new Error("fixture");
+    raw.aggregates = { ...raw.aggregates, topPaths: [{ value: "/" + "界".repeat(2000), count: 180 }] };
+    const message = formatWeComMessage(await resultFor(raw), options);
     expect(new TextEncoder().encode(message).byteLength).toBeLessThanOrEqual(2000);
-  });
-
-  it("always qualifies risk, including LOW with no observations", () => {
-    const input = makeEvidenceCatalogInput();
-    input.findings.splice(0);
-    const analysis = structuredAnalysis();
-    analysis.risk = { level: "LOW", evidenceIds: ["quality:0", "total:0"] };
-    analysis.observations = [];
-    const message = formatWeComMessage(resultFor(analysis, input), options);
-    expect(message).toContain("未命中当前关注规则");
-    expect(message).toContain("不代表已证实危害");
-  });
-
-  it("visibly escapes controls and bidirectional characters", () => {
-    const input = makeEvidenceCatalogInput();
-    input.incident.evidence.topPaths[0] = { value: "/ok\n已封禁\u0001\u202Eevil", count: 60 };
-    input.statistics.topPath = { value: "/ok\n已封禁\u0001\u202Eevil", count: 60, ratio: 60 };
-    const message = formatWeComMessage(resultFor(structuredAnalysis(), input), options);
-    expect(message).toContain("/ok\\n已封禁\\u0001\\u202Eevil");
-    expect(message).not.toContain("/ok\n已封禁");
-  });
-
-  it("obeys UTF-8 and maxLength budgets using whole-item omission", () => {
-    const input = makeEvidenceCatalogInput();
-    input.incident.evidence.topPaths.push({ value: `/${"界".repeat(600)}`, count: 1 });
-    const message = formatWeComMessage(resultFor(structuredAnalysis(), input), { ...options, maxLength: 900, topLimit: 10 });
-    expect(new TextEncoder().encode(message).byteLength).toBeLessThanOrEqual(900);
-    expect(message.length).toBeLessThanOrEqual(900);
-    expect(message).toContain("incident_id: incident-catalog-1");
-    expect(message).toContain("分析窗口:");
-    expect(message).toContain("规则关注等级: HIGH");
-    expect(message).toContain("[部分低优先级内容已省略]");
     expect(message).not.toContain("界".repeat(20));
+    expect(message).not.toMatch(/目标路径:\n(?!\[)/u);
+    expect(message).toContain("分析窗口:");
   });
-
-  it("formats rule fallback without raw model text", async () => {
-    const snapshotResult = await analyzeWafAlert(queueMessage, { collectSnapshot: () => Promise.resolve(snapshot) }, rulesConfig);
-    const message = formatWeComMessage(
-      { snapshot: snapshotResult, ai: { status: "unavailable", reason: "raw model secret output" } }, options,
-    );
-    expect(message).toContain("AI 分析暂不可用");
-    expect(message).toContain("规则分析");
-    expect(message).not.toContain("raw model secret output");
+  it("keeps empty and collection failure states explicit", async () => {
+    const empty = await resultFor({ ...hostFromSnapshot(snapshot), discoveryCount: 0, hostTotalEvents: 0, samples: [], collectionStatus: "empty" });
+    expect(formatWeComMessage(empty, options)).toContain("固定窗口零事件");
+    const failed = await analyzeHostWafAlert(queueMessage, {
+      discoverZone: () => Promise.reject(new Error("SENSITIVE")), collectHostSnapshot: () => Promise.resolve(hostFromSnapshot(snapshot)),
+    }, rulesConfig);
+    const message = formatWeComMessage({ snapshot: failed, ai: { status: "unavailable", hosts: [] } }, options);
+    expect(message).toContain("数据采集失败");
+    expect(message).not.toContain("SENSITIVE");
   });
-
-  it("keeps the explicit empty-window status", async () => {
-    const emptySnapshot = { ...snapshot, totalEvents: 0, topIps: [], topPaths: [], actions: [] };
-    const snapshotResult = await analyzeWafAlert(
-      queueMessage, { collectSnapshot: () => Promise.resolve(emptySnapshot) }, rulesConfig,
-    );
-    const message = formatWeComMessage(
-      { snapshot: snapshotResult, ai: { status: "unavailable", reason: "Insufficient Security Events data" } }, options,
-    );
-    expect(message).toContain("当前固定分析窗口未查询到足够的 Security Events 数据");
+  it("retains the byte cap and refuses impossible lower limits", async () => {
+    const result = await resultFor();
+    expect(() => formatWeComMessage(result, { ...options, maxLength: 1 })).toThrow();
+    const message = formatWeComMessage(result, { ...options, maxLength: 1200 });
+    expect(new TextEncoder().encode(message).byteLength).toBeLessThanOrEqual(1200);
+    expect(message).toContain("incident_id:");
+    expect(message).toContain("各排名相互独立");
   });
 });

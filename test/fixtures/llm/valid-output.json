@@ -1,12 +1,26 @@
 {
-  "schema_version": 2,
-  "risk": { "level": "HIGH", "evidence_ids": ["quality:0", "finding:allow_ratio", "stat:allow"] },
-  "attack": { "type": "Unknown", "confidence": 0, "evidence_ids": [] },
-  "observations": [
-    { "kind": "aggregate_concentration", "dimension": "path", "evidence_ids": ["stat:path", "finding:path_concentration", "total:0"] }
-  ],
-  "recommendations": [
-    { "kind": "review_target", "evidence_ids": ["agg:path:0"] },
-    { "kind": "manual_dashboard", "evidence_ids": ["ctx:0"] }
+  "schema_version": 3,
+  "hosts": [
+    {
+      "host_id": "h0",
+      "risk": {
+        "level": "Unknown",
+        "evidence_ids": []
+      },
+      "attack": {
+        "type": "Unknown",
+        "confidence": 0,
+        "evidence_ids": []
+      },
+      "observations": [],
+      "recommendations": [
+        {
+          "kind": "manual_dashboard",
+          "evidence_ids": [
+            "h0:ctx:0"
+          ]
+        }
+      ]
+    }
   ]
 }

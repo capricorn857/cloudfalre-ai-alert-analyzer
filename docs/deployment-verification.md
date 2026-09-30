@@ -57,6 +57,22 @@ LLM_MODEL="relay-model-name"
 
 `.dev.vars*` 已被 Git 忽略。本地测试使用 Fetch Mock，不得填写或调用真实企业微信机器人。
 
+## 历史窗口本地模拟
+
+用户授权真实查询与LLM调用后，使用 `.env` 中配置执行独立Workers测试入口。示例中的域名和时间必须换为已授权目标：
+
+```bash
+LIVE_ZONE_NAME=example.test LIVE_ALERT_TIME=2026-09-29T15:10:03+08:00 npm test -- --config test/live/alert-simulation.config.mjs
+```
+
+默认仅生成本地通知预览；不会加载企微URL或调用企微。三个LLM字段及Cloudflare Token仅在内存中使用，业务参数使用仓库 `wrangler.jsonc` 的BUSINESS_CONFIG，不执行 `.env` 内容。只查询目标Zone并执行一次生产Host分析链路，不投递真实Queue，不触发线上Worker。
+
+由于缺少原始Webhook接收时间，入口明确假定接收时间等于传入告警时间；Payload事件参考值以0占位，统计使用GraphQL总量。默认窗口为告警前30分钟至告警后60秒，每次查询与重试核验同一窗口。测试含一次Zone解析、有限GraphQL采集及一次逻辑LLM调用；允许生产Client规定的有限临时错误重试。
+
+脱敏诊断与已校验通知预览保存在运行时新建的 `/tmp/host-alert-simulation-*` 目录，目录权限0700、文件0600；预览可能包含真实事件实体，应按敏感运维资料管理，不纳入Git。默认 `npm test` 不包含 `.live.ts`。
+
+仅在用户明确授权向该机器人发送时增加 `LIVE_SEND_WECOM=true`；通知带历史模拟标记且总长不超过2000 UTF-8 bytes。发送是外部动作，不能为了重试测试而重复执行整个采集与LLM链路。预览模式下Pipeline的sent返回只代表本地适配器完成，不能当作真实投递证明。Cloudflare查询失败、AI局部降级或通知失败会令该验收入口失败，并保留受控诊断。
+
 ## 部署前门禁
 
 ```bash
@@ -87,23 +103,23 @@ openspec validate structured-evidence-references --strict
 
 ## Dashboard 同窗口核验
 
-结构化引用升级额外核验：响应为 schema_version=2，每条风险/攻击/观察/建议具有独立引用；不存在、重复、类型错误、缺少支持和数据不足确定结论分别有受控错误分类。错误通知仍含原统计和规则。一次正常采集为两次 GraphQL HTTP（聚合和样本）；输出失败时 LLM 一次，企微发送成功时一次，Queue ack、不 retry。仅 LLM 429/5xx 和通知自身临时失败按既有策略重试，不重做采集。
+Host升级核验：响应为schema_version=3、目录为v2，每Host的风险/攻击/观察/建议具有独立引用与分母；跨Host、类型错误、缺支持、无依据联合关系均拒绝。单Host失败局部降级，根结构失败全部AI降级，程序规则与其他成功Host保留。正常采集HTTP=1+2H，默认Top3为7次，最多2路并发；90秒采集总截止含响应体与退避。LLM一个逻辑调用，企微一条文本；通知重试只复用已生成文本，成功后观测失败仍ack。
 
-先运行本地 Workers mock 测试；真实 Provider/机器人验证须明确授权和环境范围。已授权的首次 `.env` Provider 烟测中，结构通过 3/3、完整引用支持校验通过 2/3，尚未达到稳定通过门槛，未完成远端部署验证；复测入口为 `npm run test:llm:live`。日志仅检查 code/reason、受控路径及计数，不收集 Prompt、模型原文、实体值或引用 ID。关注 Unknown/降级率与通知成功率，不能把支持校验通过解释为攻击已被证实。
+先运行本地Workers Mock测试；真实Provider/机器人验证仍须明确授权与环境范围。历史v2烟测结构3/3、完整校验2/3，不能作为当前v3验收记录；2026-09-29已授权v3单Host烟测完整通过2/3，一轮正文超预算被拒绝，尚未通过真实Provider门禁，也未完成3/5 Host、机器人或部署验证，详见模型兼容性验证记录。日志检查host_id、collection_stage、request_count、node_selection_count、coverage_status和受控code/reason，不收集Prompt、原文或实际Host/IP/Path。关注Unknown/降级率与通知成功率，不能把支持校验通过解释为攻击已证实。
 
 使用通知中的同一个 `analysis_window.start` 与 `analysis_window.end` 核验：
 
-- `total_events`
+- Zone总量、选中Host总量和可信覆盖比例（不编造总Host数）
 - Top IP
 - Top Path
 - Top Country
 - Top ASN
 - Action
 
-记录可解释的采样、聚合或口径差异。
+每个Host在相同窗口加精确Host过滤分别核验。Host内比例以Host总量为分母，非空UA样本单独计数；记录采样/聚合差异，不通过补查或缩窗消除差异。确认root/www的同名Path不再合并。
 
 ## 回滚
 
-将 Prompt、Schema、支持规则、Formatter 与诊断整体恢复到同一已验证代码版本。旧 Queue 消息仍兼容，不迁移窗口或 Secret；不能只回滚输出字段或同时保留旧自然语言实体扫描。恢复旧版也会恢复已知误报机制，需记录该风险。
+将采集、Prompt、Catalog/AI Schema、支持规则、Formatter与诊断整体恢复到同一已验证版本。Queue保持v1；新Consumer对缺失hostLimit固定默认3，旧Consumer忽略新增字段并恢复Zone级分析。不迁移窗口或Secret，不清空队列；记录回滚后的覆盖能力退化和跨版本重复通知风险。
 
 验证失败时部署上一已验证 Worker 版本。不要扩大在途 Queue Message 的固定窗口，不要清空 Queue 或删除远端资源。必要时暂停 Queue consumer，并保留脱敏日志和事件身份标识。

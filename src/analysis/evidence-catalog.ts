@@ -1,4 +1,4 @@
-import type { AIAnalysisInput } from "./evidence";
+import type { CatalogAnalysisInput as AIAnalysisInput } from "./evidence";
 import {
   EvidenceCatalogSchema,
   type EvidenceCatalog,
@@ -15,7 +15,7 @@ const MAX_VALUE_BYTES = 2048;
 const MAX_CATALOG_BYTES = 128 * 1024;
 const AIAnalysisInputSchema = z
   .object({
-    incident: IncidentSchema,
+    incident: IncidentSchema.pick({ resource: true, analysisWindow: true, totalEvents: true, evidence: true, samples: true }),
     statistics: StatisticsSchema,
     findings: z.array(FindingSchema),
   })
@@ -209,9 +209,9 @@ function riskAssessable(
   );
 }
 
-function buildValidatedEvidenceCatalog(input: AIAnalysisInput): EvidenceCatalog {
+function buildValidatedEvidenceCatalog(input: AIAnalysisInput, compactOptional: boolean): EvidenceCatalog {
   const nonNullUaSampleCount = input.incident.samples.filter(
-    (sample) => sample.userAgent !== null,
+    (sample) => sample.userAgent !== null && sample.userAgent.trim().length > 0,
   ).length;
   validateSources(input, nonNullUaSampleCount);
 
@@ -364,6 +364,12 @@ function buildValidatedEvidenceCatalog(input: AIAnalysisInput): EvidenceCatalog 
   });
 
   const candidate = { version: 1 as const, entries, omitted: omissions };
+  while (compactOptional && byteLength(JSON.stringify(candidate)) > MAX_CATALOG_BYTES) {
+    const removed = omitLeastImportantEvidence(entries);
+    if (removed === undefined) break;
+    if (removed.type === "sample") omissions.samples++;
+    else omissions.aggregateItems++;
+  }
   if (byteLength(JSON.stringify(candidate)) > MAX_CATALOG_BYTES) {
     throw catalogError("catalog_budget_exceeded");
   }
@@ -372,8 +378,19 @@ function buildValidatedEvidenceCatalog(input: AIAnalysisInput): EvidenceCatalog 
   return parsed.data;
 }
 
-export function buildEvidenceCatalog(input: AIAnalysisInput): EvidenceCatalog {
+export function buildEvidenceCatalog(input: AIAnalysisInput, options: { compactOptional?: boolean } = {}): EvidenceCatalog {
   const parsed = AIAnalysisInputSchema.safeParse(input);
   if (!parsed.success) throw catalogError("invalid_catalog");
-  return buildValidatedEvidenceCatalog(parsed.data);
+  return buildValidatedEvidenceCatalog(parsed.data, options.compactOptional === true);
+}
+
+export function omitLeastImportantEvidence<T extends EvidenceEntry>(entries: T[]): T | undefined {
+  let selected = -1;
+  let priority = -1;
+  for (const [index, entry] of entries.entries()) {
+    const rank = Number(entry.id.split(":").at(-1));
+    const candidate = entry.type === "sample" ? 100 + rank : entry.type.startsWith("aggregate_") ? (rank > 0 ? 50 + rank : 0) : -1;
+    if (candidate >= 0 && candidate >= priority) { selected = index; priority = candidate; }
+  }
+  return selected < 0 ? undefined : entries.splice(selected, 1)[0];
 }

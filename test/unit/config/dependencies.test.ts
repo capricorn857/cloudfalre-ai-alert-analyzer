@@ -1,20 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { calculateStatistics } from "../../../src/analysis/statistics";
-import { normalizeIncident } from "../../../src/analysis/normalizer";
-import { evaluateRules } from "../../../src/analysis/rules";
-import { buildEvidenceCatalog } from "../../../src/analysis/evidence-catalog";
 import { createProcessAlertDependencies } from "../../../src/config/dependencies";
 import { parseEnv } from "../../../src/config/env";
 import { businessConfig, validEnv } from "../../fixtures/config";
-import { queueMessage, rulesConfig, snapshot } from "../../fixtures/domain";
+import { queueMessage } from "../../fixtures/domain";
 import aggregateSuccess from "../../fixtures/graphql/aggregate-success.json";
-import samplesSuccess from "../../fixtures/graphql/samples-success.json";
 import validOutput from "../../fixtures/llm/valid-output.json";
-
-const incident = normalizeIncident(queueMessage, snapshot);
-const statistics = calculateStatistics(incident);
-const findings = evaluateRules(statistics, rulesConfig);
+import { makeHostCatalog } from "../../fixtures/host-ai";
 
 function jsonResponse(value: unknown): Response {
   return new Response(JSON.stringify(value), {
@@ -31,10 +23,10 @@ afterEach(() => {
 describe("createProcessAlertDependencies", () => {
   it("isolates the LLM timeout from GraphQL and WeCom timeouts", async () => {
     const timeout = vi.spyOn(AbortSignal, "timeout");
+    const deadlineTimer = vi.spyOn(globalThis, "setTimeout");
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse(aggregateSuccess))
-      .mockResolvedValueOnce(jsonResponse(samplesSuccess))
       .mockResolvedValueOnce(
         jsonResponse({ choices: [{ message: { content: JSON.stringify(validOutput) } }] }),
       )
@@ -51,21 +43,17 @@ describe("createProcessAlertDependencies", () => {
     });
     const dependencies = createProcessAlertDependencies(config);
 
-    await dependencies.cloudflare.collectSnapshot({
+    await dependencies.cloudflare.discoverZone({
       zoneTag: queueMessage.alert.zoneTag,
       analysisWindow: queueMessage.analysisWindow,
       sampleLimit: queueMessage.configSnapshot.sampleLimit,
     });
-    await dependencies.ai.analyze(buildEvidenceCatalog({ incident, statistics, findings }));
+    await dependencies.ai.analyzeHosts(makeHostCatalog());
     await dependencies.notification.send("test message");
 
-    expect(timeout.mock.calls.map(([milliseconds]) => milliseconds)).toEqual([
-      10_000,
-      10_000,
-      30_000,
-      10_000,
-    ]);
-    const rawLlmBody = fetchMock.mock.calls[2]?.[1]?.body;
+    expect(deadlineTimer.mock.calls.slice(0, 1).map((call) => call[1])).toEqual([10_000]);
+    expect(timeout.mock.calls.map(([milliseconds]) => milliseconds)).toEqual([30_000, 10_000]);
+    const rawLlmBody = fetchMock.mock.calls[1]?.[1]?.body;
     if (typeof rawLlmBody !== "string") throw new Error("Expected serialized LLM request");
     const llmBody = JSON.parse(rawLlmBody) as Record<string, unknown>;
     expect(llmBody.max_completion_tokens).toBe(4096);
@@ -110,7 +98,7 @@ describe("createProcessAlertDependencies", () => {
     const dependencies = createProcessAlertDependencies(config);
     let settled = false;
     const result = dependencies.ai
-      .analyze(buildEvidenceCatalog({ incident, statistics, findings }))
+      .analyzeHosts(makeHostCatalog())
       .then(
         () => ({ status: "resolved" as const }),
         (error: unknown) => ({ status: "rejected" as const, error }),

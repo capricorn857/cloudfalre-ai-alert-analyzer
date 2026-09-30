@@ -1,0 +1,110 @@
+{
+  "source": "https://api.cloudflare.com/client/v4/graphql",
+  "verifiedAt": "2026-09-24",
+  "verificationMethod": "authenticated_introspection",
+  "status": "verified",
+  "resourceIdentifiersRedacted": true,
+  "credentialStored": false,
+  "types": {
+    "ZoneFilter_InputObject": {
+      "zoneTag": "string"
+    },
+    "ZoneFirewallEventsAdaptiveGroups": {
+      "count": "uint64!",
+      "dimensions": "ZoneFirewallEventsAdaptiveGroupsDimensions"
+    },
+    "ZoneFirewallEventsAdaptiveGroupsDimensions": {
+      "clientRequestHTTPHost": "string!",
+      "clientIP": "string!",
+      "clientRequestPath": "string!",
+      "clientCountryName": "string!",
+      "clientAsn": "string!",
+      "action": "string!",
+      "source": "string!"
+    },
+    "ZoneFirewallEventsAdaptiveGroupsFilter_InputObject": {
+      "clientRequestHTTPHost": "string",
+      "datetime_geq": "Time",
+      "datetime_leq": "Time"
+    },
+    "ZoneFirewallEventsAdaptiveFilter_InputObject": {
+      "clientRequestHTTPHost": "string",
+      "datetime_geq": "Time",
+      "datetime_leq": "Time"
+    },
+    "ZoneFirewallEventsAdaptive": {
+      "datetime": "Time!",
+      "action": "string!",
+      "clientIP": "string!",
+      "clientCountryName": "string!",
+      "clientAsn": "string!",
+      "clientRequestHTTPHost": "string!",
+      "clientRequestPath": "string!",
+      "source": "string!",
+      "userAgent": "string!"
+    },
+    "Settings": {
+      "enabled": "bool!",
+      "availableFields": "[string!]!",
+      "maxPageSize": "int64!",
+      "maxNumberOfFields": "int64!",
+      "maxDuration": "int64!",
+      "notOlderThan": "int64!"
+    }
+  },
+  "verifiedOrderByMembers": {
+    "ZoneFirewallEventsAdaptiveGroupsOrderBy": ["count_DESC", "datetime_DESC"],
+    "ZoneFirewallEventsAdaptiveOrderBy": ["datetime_DESC"]
+  },
+  "datasetArguments": {
+    "firewallEventsAdaptiveGroups": {
+      "filter": "ZoneFirewallEventsAdaptiveGroupsFilter_InputObject!",
+      "limit": "uint64!",
+      "orderBy": "[ZoneFirewallEventsAdaptiveGroupsOrderBy!]",
+      "returnType": "[ZoneFirewallEventsAdaptiveGroups!]!"
+    },
+    "firewallEventsAdaptive": {
+      "filter": "ZoneFirewallEventsAdaptiveFilter_InputObject!",
+      "limit": "uint64!",
+      "orderBy": "[ZoneFirewallEventsAdaptiveOrderBy!]",
+      "returnType": "[ZoneFirewallEventsAdaptive!]!"
+    }
+  },
+  "targetZoneSettings": {
+    "firewallEventsAdaptiveGroups": {
+      "enabled": true,
+      "maxDuration": 259200,
+      "maxNumberOfFields": 30,
+      "maxPageSize": 10000,
+      "notOlderThan": 2678400,
+      "availableFields": [
+        "count", "dimensions_action", "dimensions_clientAsn",
+        "dimensions_clientCountryName", "dimensions_clientIP",
+        "dimensions_clientRequestHTTPHost", "dimensions_clientRequestPath",
+        "dimensions_source"
+      ]
+    },
+    "firewallEventsAdaptive": {
+      "enabled": true,
+      "maxDuration": 2592000,
+      "maxNumberOfFields": 40,
+      "maxPageSize": 10000,
+      "notOlderThan": 2678400,
+      "availableFields": [
+        "action", "clientAsn", "clientCountryName", "clientIP",
+        "clientRequestHTTPHost", "clientRequestPath", "datetime", "source", "userAgent"
+      ]
+    }
+  },
+  "sevenAliasBudgetVerified": true,
+  "aliasProbe": {
+    "httpStatus": 200,
+    "graphqlErrors": false,
+    "aliases": 7,
+    "windowSeconds": 60,
+    "filterStrategy": "AND_of_distinct_exact_hosts",
+    "allResultsEmpty": true,
+    "actualEventsRead": false,
+    "limitation": "Query shape accepted; runtime cost and rate limits still apply."
+  }
+}

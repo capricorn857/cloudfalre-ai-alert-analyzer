@@ -29,6 +29,28 @@ describe("parseEnv", () => {
     expect(result.business.llmMaxOutputTokens).toBe(2048);
   });
 
+  it("defaults the host analysis limit to 3", () => {
+    expect(parseEnv(validEnv).business.hostLimit).toBe(3);
+  });
+
+  it.each([1, 5])("accepts a host analysis limit of %i", (hostLimit) => {
+    const result = parseEnv({
+      ...validEnv,
+      BUSINESS_CONFIG: { ...businessConfig, hostLimit },
+    });
+
+    expect(result.business.hostLimit).toBe(hostLimit);
+  });
+
+  it.each([0, 6, 1.5])("rejects an invalid host analysis limit of %j", (hostLimit) => {
+    expect(() =>
+      parseEnv({
+        ...validEnv,
+        BUSINESS_CONFIG: { ...businessConfig, hostLimit },
+      }),
+    ).toThrow(/BUSINESS_CONFIG\.hostLimit/u);
+  });
+
   it.each([512, 2048, 8192])("accepts an LLM output token budget of %i", (llmMaxOutputTokens) => {
     const result = parseEnv({
       ...validEnv,

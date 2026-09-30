@@ -31,6 +31,7 @@
       "beforeMinutes": 30,
       "settleSeconds": 60,
       "sampleLimit": 50,
+      "hostLimit": 3,
       "requestTimeoutMs": 10000,
       "llmTimeoutMs": 30000,
       "llmMaxOutputTokens": 2048,

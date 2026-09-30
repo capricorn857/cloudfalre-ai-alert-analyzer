@@ -11,6 +11,10 @@ export interface AIAnalysisInput {
   readonly findings: Finding[];
 }
 
+export interface CatalogAnalysisInput extends Omit<AIAnalysisInput, "incident"> {
+  readonly incident: Pick<Incident, "resource" | "analysisWindow" | "totalEvents" | "evidence" | "samples">;
+}
+
 export type DeepReadonly<T> = { readonly [K in keyof T]: DeepReadonly<T[K]> };
 declare const validated: unique symbol;
 export type ValidatedAIAnalysis = DeepReadonly<{ analysis: AIAnalysis; catalog: EvidenceCatalog }> & { readonly [validated]: true };

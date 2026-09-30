@@ -198,7 +198,7 @@ const entryTypeOrder: Record<EvidenceEntry["type"], number> = {
   sample: 20,
 };
 
-const findingStatIds: Record<string, string> = {
+export const findingStatIds: Readonly<Record<string, string>> = {
   ip_concentration: "stat:ip",
   path_concentration: "stat:path",
   country_concentration: "stat:country",

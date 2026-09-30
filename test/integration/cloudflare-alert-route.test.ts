@@ -60,6 +60,46 @@ function createEnv(send: Queue["send"]) {
 const fixedClock = { now: () => new Date("2026-09-14T09:19:00Z") };
 
 describe("Cloudflare alert route", () => {
+  it.each([
+    ["ASCII", "a".repeat(128)],
+    ["multibyte", `${"界".repeat(42)}ab`],
+  ])("accepts a %s correlation ID of exactly 128 UTF-8 bytes", async (_label, correlationId) => {
+    const send = vi.fn<Queue["send"]>().mockResolvedValue(queueResponse);
+    const response = await handleCloudflareAlert(
+      new Request("https://worker.test/api/v1/alerts/cloudflare", {
+        method: "POST",
+        body: JSON.stringify({ ...payload, alert_correlation_id: correlationId }),
+      }),
+      createEnv(send),
+      { clock: fixedClock },
+    );
+
+    expect(response.status).toBe(202);
+    expect(send).toHaveBeenCalledOnce();
+    expect(send.mock.calls[0]?.[0]).toMatchObject({
+      incidentId: correlationId,
+      correlationId,
+    });
+  });
+
+  it.each([
+    ["ASCII", "a".repeat(129)],
+    ["multibyte", `${"界".repeat(42)}abc`],
+  ])("rejects a %s correlation ID over 128 UTF-8 bytes without enqueueing", async (_label, correlationId) => {
+    const send = vi.fn<Queue["send"]>();
+    const response = await handleCloudflareAlert(
+      new Request("https://worker.test/api/v1/alerts/cloudflare", {
+        method: "POST",
+        body: JSON.stringify({ ...payload, alert_correlation_id: correlationId }),
+      }),
+      createEnv(send),
+      { clock: fixedClock },
+    );
+
+    expect(response.status).toBe(400);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("returns 404 for other paths and 405 for other methods", async () => {
     const send = vi.fn<Queue["send"]>();
     const env = createEnv(send);

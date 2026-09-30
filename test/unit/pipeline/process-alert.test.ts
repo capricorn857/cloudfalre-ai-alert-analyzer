@@ -2,24 +2,23 @@ import { describe, expect, it, vi } from "vitest";
 
 import { processAlert } from "../../../src/pipeline/process-alert";
 import { queueMessage, rulesConfig, snapshot } from "../../fixtures/domain";
-import type { AIAnalysis } from "../../../src/domain/ai-analysis";
 import { AppError } from "../../../src/observability/errors";
-import { structuredAnalysis } from "../../fixtures/structured-ai";
-
-const analysis: AIAnalysis = structuredAnalysis();
+import { makeHostAIResponse } from "../../fixtures/host-ai";
+import { hostFromSnapshot } from "../../fixtures/host-analysis";
 
 function dependencies(events: string[]) {
   return {
     cloudflare: {
-      collectSnapshot: () => {
+      discoverZone: () => {
         events.push("cloudflare");
-        return Promise.resolve(snapshot);
+        return Promise.resolve({ zoneTotalEvents: snapshot.totalEvents, topHosts: [{ host: "example.test", count: snapshot.totalEvents }] });
       },
+      collectHostSnapshot: () => Promise.resolve(hostFromSnapshot(snapshot)),
     },
     ai: {
-      analyze: () => {
+      analyzeHosts: () => {
         events.push("ai");
-        return Promise.resolve(analysis);
+        return Promise.resolve(makeHostAIResponse());
       },
     },
     notification: {
@@ -42,6 +41,14 @@ function dependencies(events: string[]) {
 }
 
 describe("processAlert", () => {
+  it("handles an unrepresentable legacy ID locally without attempting notification", async () => {
+    const deps = dependencies([]);
+    const send = vi.fn().mockResolvedValue(undefined);
+    deps.notification.send = send;
+    await expect(processAlert({ ...queueMessage, incidentId: "i".repeat(3000) }, deps)).resolves.toMatchObject({ status: "notification_failed" });
+    expect(send).not.toHaveBeenCalled();
+    expect(deps.logger.error).toHaveBeenCalledWith("notification_failed", expect.objectContaining({ error_code: "notification_content_unrepresentable", failure_source: "formatter", retryable: false }));
+  });
   it("orchestrates collection, AI, formatting, and notification in order", async () => {
     const events: string[] = [];
 
@@ -50,19 +57,19 @@ describe("processAlert", () => {
       snapshotStatus: "success",
       aiStatus: "available",
     });
-    expect(events).toEqual(["cloudflare", "ai", "notification", "log"]);
+    expect(events.filter((event) => event !== "log")).toEqual(["cloudflare", "ai", "notification"]);
   });
 
   it("sends a fallback notification when AI fails", async () => {
     const events: string[] = [];
     const deps = dependencies(events);
-    deps.ai.analyze = () => Promise.reject(new Error("model failed"));
+    deps.ai.analyzeHosts = () => Promise.reject(new Error("model failed"));
 
     await expect(processAlert(queueMessage, deps)).resolves.toMatchObject({
       status: "sent",
       aiStatus: "unavailable",
     });
-    expect(events).toEqual(["cloudflare", "notification", "log"]);
+    expect(events.filter((event) => event !== "log")).toEqual(["cloudflare", "notification"]);
   });
 
   it("records notification failure without throwing to Queue and isolates logging failure after send", async () => {
@@ -122,8 +129,8 @@ describe("processAlert", () => {
         responseCategory: "transport_error",
       }),
     );
-    deps.cloudflare.collectSnapshot = collectSnapshot;
-    deps.ai.analyze = analyze;
+    deps.cloudflare.discoverZone = collectSnapshot;
+    deps.ai.analyzeHosts = analyze;
     deps.notification.send = send;
 
     await expect(processAlert(queueMessage, deps)).resolves.toMatchObject({

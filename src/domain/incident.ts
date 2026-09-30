@@ -17,7 +17,7 @@ export const SecurityEventSampleSchema = z.object({
   clientRequestHTTPHost: z.string().min(1).nullable(),
   clientRequestPath: z.string().min(1).nullable(),
   source: z.string().min(1).nullable(),
-  userAgent: z.string().min(1).nullable(),
+  userAgent: z.string().nullable(),
 });
 
 export const IncidentSchema = z.object({
