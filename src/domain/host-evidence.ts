@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { EvidenceEntrySchema, EvidenceCatalogSchema, findingStatIds } from "./evidence-catalog";
+import { ATTENTION_SCOPE } from "./event-scope";
 import { HostIdSchema } from "./host-analysis";
 
 const OwnerSchema = z.union([z.strictObject({ kind: z.literal("zone") }), z.strictObject({ kind: z.literal("host"), hostId: HostIdSchema })]);
@@ -14,6 +15,7 @@ export const ScopedEvidenceEntrySchema = z.union(EvidenceEntrySchema.options.map
 })));
 export const HostEvidenceCatalogSchema = z.strictObject({
   version: z.literal(2),
+  policyId: z.literal(ATTENTION_SCOPE.policyId), eventScope: z.literal(ATTENTION_SCOPE.eventScope),
   incidentId: z.string().min(1), correlationId: z.string().min(1),
   hostIds: z.array(HostIdSchema).max(5), unavailableHosts: z.array(HostIdSchema).max(5),
   entries: z.array(ScopedEvidenceEntrySchema).max(328),
@@ -21,6 +23,7 @@ export const HostEvidenceCatalogSchema = z.strictObject({
 }).superRefine((catalog, context) => {
   const ids = new Set<string>();
   for (const entry of catalog.entries) {
+    if ((entry.type === "aggregate_action" && entry.value.value === "block") || (entry.type === "sample" && entry.value.action === "block")) context.addIssue({ code: "custom", message: "blocked evidence outside attention scope" });
     const prefix = entry.owner.kind === "host" ? entry.owner.hostId : "zone";
     if (!entry.id.startsWith(`${prefix}:`) || ids.has(entry.id)) context.addIssue({ code: "custom", message: "invalid owner or duplicate ID" });
     ids.add(entry.id);

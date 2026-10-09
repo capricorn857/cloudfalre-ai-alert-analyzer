@@ -123,3 +123,11 @@ Host升级核验：响应为schema_version=3、目录为v2，每Host的风险/�
 将采集、Prompt、Catalog/AI Schema、支持规则、Formatter与诊断整体恢复到同一已验证版本。Queue保持v1；新Consumer对缺失hostLimit固定默认3，旧Consumer忽略新增字段并恢复Zone级分析。不迁移窗口或Secret，不清空队列；记录回滚后的覆盖能力退化和跨版本重复通知风险。
 
 验证失败时部署上一已验证 Worker 版本。不要扩大在途 Queue Message 的固定窗口，不要清空 Queue 或删除远端资源。必要时暂停 Queue consumer，并保留脱敏日志和事件身份标识。
+
+## 已拦截事件静默发布核验
+
+使用固定策略exclude-exact-block-v1，Queue/vars/bindings不变。对目标Zone核验rawTotal、attentionTotal、rawActions(limit20)、topHosts四alias及现有Host7聚合/样本查询。Action=null查询条件不可假设支持；通过未过滤分布完整性与计数比较保护未知类别，未知/缺失/截断/冲突发送基础通知而非静默。block数来自分布中的直接block组，不做采样差值。
+
+非生产验证分别覆盖观察零（1次GraphQL、无LLM/企微、ack）、混合（默认H=3为7次GraphQL、待关注分母）、原始空（基础通知）、未知Action（基础降级）、污染样本（仅样本失败）。日志reason=no_attention_events_observed，observation_basis=adaptive_aggregate，明确接受稀少非block采样遗漏。企微成功与静默终态的日志异常都不能触发主动Queue重放。
+
+发布需另行授权并整包切换Client/领域/Catalog/Prompt/Formatter，旧目录缺scope标识不得混用。回滚旧包恢复block噪声，不清空或迁移Queue、不重新计算窗口；不承诺跨版本策略快照或exactly-once。离线Mock不替代生产部署和真实Provider验收。

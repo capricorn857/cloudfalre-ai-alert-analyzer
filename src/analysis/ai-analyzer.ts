@@ -17,7 +17,7 @@ export interface HostAIAnalysisResult {
 }
 
 export async function runHostAIAnalysis(snapshot: HostSnapshotAnalysisResult, client: HostAIAnalysisClient): Promise<HostAIAnalysisResult> {
-  if (snapshot.status === "collection_failed") return { status: "unavailable", hosts: [] };
+  if (!("incident" in snapshot)) return { status: "unavailable", hosts: [] };
   const ids = snapshot.incident.hosts.map((host) => host.collection.hostId);
   const unavailable = (reason: string): HostAIResult[] => ids.map((hostId) => ({ hostId, status: "unavailable", reason }));
   let catalog: HostEvidenceCatalog;

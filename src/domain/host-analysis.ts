@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { EventScopeSchema, ScopedDiscoverySchema } from "./event-scope";
 import { EvidenceItemSchema, SecurityEventSampleSchema, IncidentSchema } from "./incident";
 import { StatisticsSchema } from "./statistics";
 import { FindingSchema } from "./finding";
@@ -10,13 +11,7 @@ export const SelectedHostSchema = z.object({
   host: z.string().refine((value) => value.trim().length > 0),
   discoveryCount: EventCountSchema,
 });
-export const ZoneDiscoverySchema = z.object({
-  zoneTotalEvents: EventCountSchema,
-  topHosts: z.array(z.object({ host: z.string().nullable(), count: EventCountSchema })).max(10),
-}).superRefine((value, context) => {
-  const names = value.topHosts.map((item) => item.host);
-  if (new Set(names).size !== names.length) context.addIssue({ code: "custom", message: "duplicate host" });
-});
+export const ZoneDiscoverySchema = ScopedDiscoverySchema;
 export const HostAggregatesSchema = z.object({
   topIps: z.array(EvidenceItemSchema).max(10),
   topPaths: z.array(EvidenceItemSchema).max(10),
@@ -26,6 +21,7 @@ export const HostAggregatesSchema = z.object({
   sources: z.array(EvidenceItemSchema).max(20),
 });
 export const HostCollectionSchema = SelectedHostSchema.extend({
+  ...EventScopeSchema.shape,
   collectionStatus: z.enum(["success", "empty", "partial", "failed"]),
   hostTotalEvents: EventCountSchema.nullable(),
   aggregates: HostAggregatesSchema.nullable(),
@@ -38,6 +34,9 @@ export const HostCollectionSchema = SelectedHostSchema.extend({
     retryable: z.boolean(), durationMs: z.number().nonnegative(), httpStatus: z.number().optional(),
   }).optional(),
 }).superRefine((value, context) => {
+  if (value.aggregates?.actions.some((item) => item.value === "block") || value.samples.some((item) => item.action === "block")) {
+    context.addIssue({ code: "custom", message: "blocked event in attention scope" });
+  }
   const failed = value.collectionStatus === "failed";
   if (failed ? value.hostTotalEvents !== null || value.aggregates !== null || value.samplesStatus !== "not_requested" : value.hostTotalEvents === null || value.aggregates === null) {
     context.addIssue({ code: "custom", message: "inconsistent collection state" });
@@ -73,6 +72,9 @@ export type HostStatistics = z.infer<typeof HostStatisticsSchema>;
 export type HostQuality = z.infer<typeof HostQualitySchema>;
 
 export const ZoneOverviewSchema = z.object({
+  ...EventScopeSchema.shape,
+  rawTotalEvents: EventCountSchema, blockedTotalEvents: EventCountSchema.nullable(),
+  countQuality: z.literal("estimated"),
   zoneTotalEvents: EventCountSchema,
   discoveredHosts: ZoneDiscoverySchema.shape.topHosts,
   selectedHostCount: z.number().int().min(0).max(5),

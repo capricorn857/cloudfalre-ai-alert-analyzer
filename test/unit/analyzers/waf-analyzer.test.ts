@@ -1,3 +1,4 @@
+import { attentionCounts } from "../../fixtures/blocked-events";
 import { describe, expect, it, vi } from "vitest";
 import { analyzeWafAlert } from "../../../src/analyzers/waf-analyzer";
 import { queueMessage, rulesConfig, snapshot } from "../../fixtures/domain";
@@ -6,7 +7,7 @@ import { AppError } from "../../../src/observability/errors";
 
 describe("analyzeWafAlert", () => {
   it("collects each selected Host once and computes its statistics", async () => {
-    const discoverZone = vi.fn().mockResolvedValue({ zoneTotalEvents: 400, topHosts: [{ host: "example.test", count: 400 }] });
+    const discoverZone = vi.fn().mockResolvedValue({ ...attentionCounts(400), topHosts: [{ host: "example.test", count: 400 }] });
     const collectHostSnapshot = vi.fn().mockResolvedValue(hostFromSnapshot(snapshot));
     const result = await analyzeWafAlert(queueMessage, { discoverZone, collectHostSnapshot }, rulesConfig);
     expect(result).toMatchObject({ status: "success", incident: { hosts: [{ statistics: { totalEvents: 400, allowRatio: 87.5 }, ruleAttention: "HIGH" }] } });
@@ -16,7 +17,7 @@ describe("analyzeWafAlert", () => {
   });
   it("does not query hosts or manufacture statistics after empty discovery", async () => {
     const collectHostSnapshot = vi.fn();
-    const result = await analyzeWafAlert(queueMessage, { discoverZone: vi.fn().mockResolvedValue({ zoneTotalEvents: 0, topHosts: [] }), collectHostSnapshot }, rulesConfig);
+    const result = await analyzeWafAlert(queueMessage, { discoverZone: vi.fn().mockResolvedValue({ ...attentionCounts(0), topHosts: [] }), collectHostSnapshot }, rulesConfig);
     expect(result).toMatchObject({ status: "empty", incident: { hosts: [], zone: { analyzedHostCount: 0, coverage: { ratio: null } } } });
     expect(collectHostSnapshot).not.toHaveBeenCalled();
   });
@@ -28,7 +29,7 @@ describe("analyzeWafAlert", () => {
   });
   it("retains discovery when every Host query fails", async () => {
     const result = await analyzeWafAlert(queueMessage, {
-      discoverZone: vi.fn().mockResolvedValue({ zoneTotalEvents: 400, topHosts: [{ host: "example.test", count: 400 }] }),
+      discoverZone: vi.fn().mockResolvedValue({ ...attentionCounts(400), topHosts: [{ host: "example.test", count: 400 }] }),
       collectHostSnapshot: vi.fn().mockRejectedValue(new Error("SENSITIVE")),
     }, rulesConfig);
     expect(result).toMatchObject({ status: "partial", incident: { zone: { zoneTotalEvents: 400, failedHostCount: 1 }, hosts: [{ collection: { hostTotalEvents: null, collectionStatus: "failed" } }] } });

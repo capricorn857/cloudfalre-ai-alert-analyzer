@@ -3,14 +3,21 @@
     "viewer": {
       "zones": [
         {
-          "total": [{ "count": 0 }],
+          "total": [
+            {
+              "count": 0
+            }
+          ],
           "topIps": [],
           "topPaths": [],
           "topHosts": [],
           "topCountries": [],
           "topAsns": [],
           "actions": [],
-          "sources": []
+          "sources": [],
+          "rawTotal": [],
+          "attentionTotal": [],
+          "rawActions": []
         }
       ]
     }

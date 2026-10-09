@@ -28,11 +28,25 @@ export interface HostProcessAlertDependencies {
 export async function processHostAlert(message: QueueMessage, dependencies: HostProcessAlertDependencies) {
   validateFixedWindow(message);
   const snapshot = await analyzeHostWafAlert(message, dependencies.cloudflare, dependencies.rulesConfig);
-  const ai = await runHostAIAnalysis(snapshot, dependencies.ai);
   const context = { incident_id: message.incidentId, correlation_id: message.correlationId, analysis_window: message.analysisWindow,
     request_count: snapshot.collectionMetrics?.requestCount ?? 0, node_selection_count: snapshot.collectionMetrics?.nodeSelectionCount ?? 0 };
+  if (snapshot.status === "suppressed") {
+    try {
+      dependencies.logger.info("alert_suppressed", {
+        ...context, reason: snapshot.reason, policy_id: snapshot.discovery.policyId,
+        event_scope: snapshot.discovery.eventScope, raw_total_events: snapshot.discovery.rawTotalEvents,
+        attention_total_events: snapshot.discovery.zoneTotalEvents, blocked_total_events: snapshot.discovery.blockedTotalEvents,
+        count_quality: snapshot.discovery.countQuality, comparison_status: "comparable",
+        observation_basis: "adaptive_aggregate", sampling_limitation: "rare_events_may_be_unobserved",
+        wecom_status: "not_requested", llm_api_status: "not_requested",
+      });
+    } catch { /* A business terminal result must survive observability failures. */ }
+    return { status: "suppressed" as const, snapshotStatus: snapshot.status, aiStatus: "not_requested" as const };
+  }
+  const ai = await runHostAIAnalysis(snapshot, dependencies.ai);
   try {
-    if (snapshot.status === "collection_failed") logExternalFailure(dependencies.logger, message, snapshot.failure);
+    if (snapshot.status === "suppression_ineligible") dependencies.logger.warn("suppression_ineligible", { ...context, reason: snapshot.reason });
+    else if (snapshot.status === "collection_failed") logExternalFailure(dependencies.logger, message, snapshot.failure);
     else for (const host of snapshot.incident.hosts) {
       if (host.collection.failure !== undefined) {
         const { httpStatus, ...failure } = host.collection.failure;

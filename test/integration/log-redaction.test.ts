@@ -1,3 +1,4 @@
+import { attentionCounts } from "../fixtures/blocked-events";
 import { describe, expect, it, vi } from "vitest";
 
 import { createLogger } from "../../src/observability/logger";
@@ -25,7 +26,7 @@ describe("log redaction integration", () => {
     const ai = new LLMClient({ baseUrl: "https://llm.example.test/v1", model: "test", apiKey: "API_KEY_SENTINEL", fetchFn, timeoutMs: 1000, maxOutputTokens: 2048 });
     const notification = { send: vi.fn().mockResolvedValue(undefined) };
     await processAlert(queueMessage, {
-      cloudflare: { discoverZone: vi.fn().mockResolvedValue({ zoneTotalEvents: snapshot.totalEvents, topHosts: [{ host: "example.test", count: snapshot.totalEvents }] }), collectHostSnapshot: vi.fn().mockResolvedValue(hostFromSnapshot({ ...snapshot, samples: snapshot.samples.map((sample) => ({ ...sample, userAgent: "PROMPT_SENTINEL" })) })) },
+      cloudflare: { discoverZone: vi.fn().mockResolvedValue({ ...attentionCounts(snapshot.totalEvents), topHosts: [{ host: "example.test", count: snapshot.totalEvents }] }), collectHostSnapshot: vi.fn().mockResolvedValue(hostFromSnapshot({ ...snapshot, samples: snapshot.samples.map((sample) => ({ ...sample, userAgent: "PROMPT_SENTINEL" })) })) },
       ai, notification, logger: createLogger({ sink }), rulesConfig,
       formatterOptions: { timeZone: "Asia/Shanghai", maxLength: 4000, topLimit: 5 },
     });

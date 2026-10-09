@@ -19,6 +19,11 @@ describe("calculateStatistics", () => {
     expect(statistics.requestRatePerSecond).toBeCloseTo(400 / 1874);
   });
 
+  it("classifies Actions by exact equality without case or whitespace folding", () => {
+    const incident = normalizeIncident(queueMessage, { ...snapshot, actions: [{ value: "BLOCK", count: 100 }, { value: "block ", count: 100 }, { value: "block", count: 20 }, { value: "ALLOW", count: 100 }, { value: "CHALLENGE", count: 80 }] });
+    expect(calculateStatistics(incident)).toMatchObject({ blockRatio: 5, allowRatio: 0, challengeRatio: 0 });
+  });
+
   it("returns explicit insufficient data for a zero denominator", () => {
     const statistics = calculateStatistics(
       normalizeIncident(queueMessage, { ...snapshot, totalEvents: 0, topIps: [], actions: [] }),

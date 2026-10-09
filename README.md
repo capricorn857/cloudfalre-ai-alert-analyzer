@@ -2,7 +2,7 @@
 
 ## 项目简介
 
-Cloudflare AI Alert Analyzer 是面向运维与安全工程师的 Cloudflare Workers WAF 告警分析系统。它接收 Cloudflare WAF 告警，在固定时间窗口内完成一次只读快照分析，并将确定性规则分析与可选 AI 分析结果发送到企业微信。
+Cloudflare AI Alert Analyzer 是面向运维与安全工程师的 Cloudflare Workers WAF 告警分析系统。它接收 Cloudflare WAF 告警，在固定时间窗口内完成一次只读快照分析，先排除明确的 block 事件，再将待关注事件的确定性规则分析与可选 AI 分析结果发送到企业微信；符合条件的过滤后观察零结果正常静默。
 
 系统不修改 WAF、Zone 或其他 Cloudflare 配置，也不持续追踪后续事件。本文仅说明操作流程，不授权创建远端资源、写入 Secret 或部署生产环境。
 
@@ -13,7 +13,8 @@ Cloudflare Security Events 通知
   -> POST /api/v1/alerts/cloudflare
   -> Schema 校验、固定分析窗口、延迟写入 Queue
   -> cloudflare-ai-alert-analyzer Queue
-  -> GraphQL Zone 总量与 Top Host 发现
+  -> GraphQL 原始总量/Action分布与过滤后总量/Top Host发现
+  -> 范围一致性检查：观察零静默，无法判断则基础降级通知
   -> 同一固定窗口内按 Host 过滤采集、独立统计与规则
   -> 一次多 Host AI 分析或按 Host 规则降级
   -> 单条企业微信通知（2000 UTF-8 字节以内）
@@ -26,6 +27,20 @@ Cloudflare Security Events 通知
 - Queue 使用至少一次投递语义，极端情况下可能产生重复通知；通过通知中的 `incident_id` 和 `correlation_id` 人工识别。
 - LLM 失败会产生确定性规则降级通知，不会因此丢弃告警或重放整条消息。
 - MVP Webhook 没有入站鉴权。若 Cloudflare Notifications 需要调用该端点，不得以 Cloudflare Access 保护该路由；生产使用前应明确接受公网入口风险并配置流量观测。
+
+## 已拦截事件静默
+
+固定策略 `exclude-exact-block-v1` 仅排除原始 Action 严格等于 `block` 的事件，不区分自定义/托管规则或查询IP名单。过滤发生在Top Host选择之前，Host统计、样本、Findings、AI Evidence及通知共用待关注范围；非block不证明攻击成功或已到达源站。
+
+发现阶段在同一固定窗口查询原始总量、未过滤Action分布（最多20组）、过滤后总量及Top Host。只有分布未截断、类别无重复且完整计数一致，才继续分析或静默。block计数直接取完整分布中的block组，不用两个独立采样总量相减。
+
+- 原始总量为正、待关注聚合为零、直接block计数与原始总量一致且过滤Top Host为空：跳过LLM和企微，记录 `alert_suppressed` / `no_attention_events_observed` 并ack。
+- 原始窗口有效零：发送数据不足基础通知；查询失败、关键数据缺失、Action分布截断/冲突：发送受控降级通知。
+- null、字段缺失或空Action不视为block；原始分布有正计数不可判定类别时，无法可靠保留过滤范围，基础降级且不调用AI。已可靠返回的Host未知动作保留为unknown并标注，非空未来Action及大小写/空白变体不冒充block。
+
+这是Adaptive聚合的“未观察到”策略，已明确接受采样漏掉稀少非block事件的风险，不宣称所有底层请求都已拦截。日志保留策略、窗口、关联ID、估计计数和采样限定；静默日志失败不主动重放，也不记录企微发送成功。
+
+不新增策略vars或Queue字段。新旧合法v1消息均使用本策略及原固定窗口；整包回滚会恢复旧版本block提醒，可能跨版本重复通知，不回补已静默历史事件。
 
 ## 前置条件
 
@@ -104,7 +119,7 @@ npm test
 
 `BUSINESS_CONFIG.hostLimit` 默认3，整数范围1..5，写入 Queue 的 `configSnapshot`；旧 v1 消息缺此字段时固定使用3，不受消费时配置变化影响。`sampleLimit` 默认50、最多100，现为每 Host 的样本上限。发现最多10个候选，不分页补采；空 Host 不查询、不用 Zone 名补齐。
 
-正常 GraphQL 请求数为 `1+2H`，默认7次，最多两路HTTP并发；采集总截止90秒含响应体和退避，每个操作至多2次技术重试。Host比例以Host总量为分母，UA以该Host非空UA样本数为分母；Zone覆盖只计入完整一致的Host聚合，失败不记零，发现计数不一致时覆盖显示未知。相同Host的独立ASN/IP/Path排名也不构成联合归因。
+正常 GraphQL 请求数为 `1+2H`，默认7次，最多两路HTTP并发；采集总截止90秒含响应体和退避，每个操作至多2次技术重试。发现阶段4个alias、每Host7个聚合alias和1个样本node，正常node selections为4+8H（最大44，含技术重试最大132）。Host比例以过滤后Host总量为分母，UA以该Host非空UA样本数为分母；Zone覆盖只计入完整一致的Host聚合，失败不记零，发现计数不一致时覆盖显示未知。相同Host的独立ASN/IP/Path排名也不构成联合归因。
 
 通知按Zone、Host关注与防护、集中建议、时间覆盖追踪排列。IP/Path默认Top3、Country/ASN默认Top1，预算不足整项省略。新Webhook的关联ID最多128 UTF-8字节；旧Queue仍可读，若完整历史ID导致最小消息不可表示，则记录 `notification_content_unrepresentable` 并ack，不发送丢失追踪信息的替代消息。
 

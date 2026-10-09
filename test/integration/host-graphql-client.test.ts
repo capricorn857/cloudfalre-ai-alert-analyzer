@@ -1,26 +1,27 @@
+import { attentionCounts } from "../fixtures/blocked-events";
 import { describe, expect, it, vi } from "vitest";
 import { CloudflareGraphQLClient } from "../../src/clients/cloudflare-graphql";
 
 const input = { zoneTag: "zone-test", analysisWindow: { start: "2026-09-24T00:00:00.000Z", end: "2026-09-24T00:31:00.000Z" }, sampleLimit: 50 };
 const selected = { hostId: "h0", host: "example.test", discoveryCount: 600 };
-const aggregate = { total: [{ count: 600 }], topIps: [{ count: 360, dimensions: { clientIP: "192.0.2.10" } }], topPaths: [{ count: 300, dimensions: { clientRequestPath: "/login" } }], topCountries: [{ count: 600, dimensions: { clientCountryName: "ZZ" } }], topAsns: [{ count: 600, dimensions: { clientAsn: "64512" } }], actions: [{ count: 600, dimensions: { action: "block" } }], sources: [{ count: 600, dimensions: { source: "waf" } }] };
+const aggregate = { total: [{ count: 600 }], topIps: [{ count: 360, dimensions: { clientIP: "192.0.2.10" } }], topPaths: [{ count: 300, dimensions: { clientRequestPath: "/login" } }], topCountries: [{ count: 600, dimensions: { clientCountryName: "ZZ" } }], topAsns: [{ count: 600, dimensions: { clientAsn: "64512" } }], actions: [{ count: 600, dimensions: { action: "log" } }], sources: [{ count: 600, dimensions: { source: "waf" } }] };
 const response = (zone: unknown) => new Response(JSON.stringify({ data: { viewer: { zones: [zone] } } }));
 
 describe("host filtered GraphQL operations", () => {
   it("discovers hosts and queries each host using the unchanged window", async () => {
     const fetchFn = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(response({ total: [{ count: 1000 }], topHosts: [{ count: 600, dimensions: { clientRequestHTTPHost: "example.test" } }] }))
+      .mockResolvedValueOnce(response({ rawTotal: [{ count: 1000 }], attentionTotal: [{ count: 1000 }], rawActions: [{ count: 1000, dimensions: { action: "allow" } }], topHosts: [{ count: 600, dimensions: { clientRequestHTTPHost: "example.test" } }] }))
       .mockResolvedValueOnce(response(aggregate))
       .mockResolvedValueOnce(response({ samples: [] }));
     const client = new CloudflareGraphQLClient({ token: "test", fetchFn, timeoutMs: 1000, retries: 0 });
-    expect(await client.discoverZone(input)).toEqual({ zoneTotalEvents: 1000, topHosts: [{ host: "example.test", count: 600 }] });
+    expect(await client.discoverZone(input)).toEqual({ ...attentionCounts(1000), topHosts: [{ host: "example.test", count: 600 }] });
     expect(await client.collectHostSnapshot(input, selected)).toMatchObject({ collectionStatus: "success", hostTotalEvents: 600, aggregates: { topPaths: [{ value: "/login", count: 300 }] } });
     const bodies = fetchFn.mock.calls.map((call) => {
       const body = call[1]?.body;
       if (typeof body !== "string") throw new Error("Expected JSON request body");
       return JSON.parse(body) as { query: string; variables: Record<string, unknown> };
     });
-    expect(bodies[0]?.query.match(/firewallEventsAdaptiveGroups\(/gu)).toHaveLength(2);
+    expect(bodies[0]?.query.match(/firewallEventsAdaptiveGroups\(/gu)).toHaveLength(4);
     expect(bodies[1]?.query.match(/firewallEventsAdaptiveGroups\(/gu)).toHaveLength(7);
     for (const body of bodies) expect(body.variables).toMatchObject({ zoneTag: input.zoneTag, start: input.analysisWindow.start, end: input.analysisWindow.end });
     for (const body of bodies.slice(1)) expect(body.variables.host).toBe("example.test");
@@ -36,7 +37,7 @@ describe("host filtered GraphQL operations", () => {
     expect(fetchFn).toHaveBeenCalledOnce();
   });
   it("rejects samples assigned to a different host", async () => {
-    const fetchFn = vi.fn<typeof fetch>().mockResolvedValueOnce(response(aggregate)).mockResolvedValueOnce(response({ samples: [{ datetime: input.analysisWindow.start, action: "block", clientIP: "192.0.2.10", clientRequestHTTPHost: "other.test" }] }));
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValueOnce(response(aggregate)).mockResolvedValueOnce(response({ samples: [{ datetime: input.analysisWindow.start, action: "log", clientIP: "192.0.2.10", clientRequestHTTPHost: "other.test" }] }));
     const client = new CloudflareGraphQLClient({ token: "test", fetchFn, timeoutMs: 1000, retries: 0 });
     expect(await client.collectHostSnapshot(input, selected)).toMatchObject({ collectionStatus: "partial", samplesStatus: "failed", samples: [] });
   });

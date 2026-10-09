@@ -1,3 +1,4 @@
+import { attentionCounts } from "../fixtures/blocked-events";
 import { describe, expect, it, vi } from "vitest";
 
 import { processAlert } from "../../src/pipeline/process-alert";
@@ -13,7 +14,7 @@ vi.mock("../../src/analysis/statistics", { spy: true });
 
 function baseDependencies() {
   return {
-    cloudflare: { discoverZone: vi.fn().mockResolvedValue({ zoneTotalEvents: snapshot.totalEvents, topHosts: [{ host: "example.test", count: snapshot.totalEvents }] }), collectHostSnapshot: vi.fn().mockResolvedValue(hostFromSnapshot(snapshot)) },
+    cloudflare: { discoverZone: vi.fn().mockResolvedValue({ ...attentionCounts(snapshot.totalEvents), topHosts: [{ host: "example.test", count: snapshot.totalEvents }] }), collectHostSnapshot: vi.fn().mockResolvedValue(hostFromSnapshot(snapshot)) },
     ai: {
       analyzeHosts: vi.fn().mockResolvedValue(makeHostAIResponse()),
     },

@@ -1,3 +1,4 @@
+import { attentionCounts } from "../../fixtures/blocked-events";
 import { describe, expect, it, vi } from "vitest";
 
 import { processAlert } from "../../../src/pipeline/process-alert";
@@ -11,7 +12,7 @@ function dependencies(events: string[]) {
     cloudflare: {
       discoverZone: () => {
         events.push("cloudflare");
-        return Promise.resolve({ zoneTotalEvents: snapshot.totalEvents, topHosts: [{ host: "example.test", count: snapshot.totalEvents }] });
+        return Promise.resolve({ ...attentionCounts(snapshot.totalEvents), topHosts: [{ host: "example.test", count: snapshot.totalEvents }] });
       },
       collectHostSnapshot: () => Promise.resolve(hostFromSnapshot(snapshot)),
     },

@@ -11,6 +11,33 @@ const input = { message: { ...queueMessage, analysisWindow: hostWindow }, zoneTo
 const unknown = { host_id: "h0", risk: { level: "Unknown", evidence_ids: [] }, attack: { type: "Unknown", confidence: 0, evidence_ids: [] }, observations: [], recommendations: [{ kind: "manual_dashboard", evidence_ids: ["h0:ctx:0"] }] };
 
 describe("Host evidence ownership", () => {
+  it("requires attention scope and rejects raw or exact-block contamination", () => {
+    const catalog = buildHostEvidenceCatalog(input);
+    expect(catalog).toMatchObject({ policyId: "exclude-exact-block-v1", eventScope: "attention" });
+    const legacy = { ...catalog, policyId: undefined, eventScope: undefined };
+    expect(HostEvidenceCatalogSchema.safeParse(legacy).success).toBe(false);
+    const contaminated = structuredClone(catalog);
+    const action = contaminated.entries.find((entry) => entry.type === "aggregate_action");
+    if (action?.type !== "aggregate_action") throw new Error("fixture action missing");
+    action.value.value = "block";
+    expect(HostEvidenceCatalogSchema.safeParse(contaminated).success).toBe(false);
+    const raw = structuredClone(input);
+    const first = raw.hosts[0];
+    if (first === undefined) throw new Error("fixture");
+    Object.assign(first.collection, { eventScope: "raw" });
+    expect(buildHostEvidenceCatalog(raw).unavailableHosts).toContain("h0");
+  });
+  it("uses exact Action numerators and rejects exact-block samples", () => {
+    const raw = makeHost();
+    if (raw.aggregates === null) throw new Error("fixture");
+    raw.aggregates.actions = [{ value: "BLOCK", count: 300 }, { value: "block ", count: 300 }];
+    const catalog = buildHostEvidenceCatalog({ ...input, hosts: [analyzeHost(raw, 1000, hostWindow, rulesConfig)] });
+    expect(catalog.entries.find((entry) => entry.type === "stat_block")).toMatchObject({ value: { ratio: 0 }, denominator: { numerator: 0 } });
+    const sample = catalog.entries.find((entry) => entry.type === "sample");
+    if (sample?.type !== "sample") throw new Error("fixture sample");
+    sample.value.action = "block";
+    expect(HostEvidenceCatalogSchema.safeParse(catalog).success).toBe(false);
+  });
   it("builds stable v2 evidence with explicit denominator and Host namespaces", () => {
     const catalog = buildHostEvidenceCatalog(input);
     expect(catalog.version).toBe(2);

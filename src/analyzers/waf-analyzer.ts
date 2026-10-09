@@ -1,7 +1,9 @@
+import { ATTENTION_SCOPE, ScopedDiscoverySchema } from "../domain/event-scope";
+import { decideSuppression } from "../analysis/suppression";
 import type { RulesConfig } from "../config/rules";
 import type { QueueMessage } from "../domain/queue-message";
 import { AppError, toExternalFailure } from "../observability/errors";
-import { HostIncidentSchema, HostCollectionSchema, ZoneDiscoverySchema, type HostCollection } from "../domain/host-analysis";
+import { HostIncidentSchema, HostCollectionSchema, type HostCollection } from "../domain/host-analysis";
 import type { HostAnalyticsClient } from "../clients/contracts";
 import type { HostSnapshotAnalysisResult } from "../domain/analysis-result";
 import { analyzeHost, selectHosts, summarizeCoverage } from "../analysis/host-analysis";
@@ -13,11 +15,14 @@ export async function analyzeHostWafAlert(message: QueueMessage, client: HostAna
   const input = { zoneTag: message.alert.zoneTag, analysisWindow: message.analysisWindow,
     sampleLimit: message.configSnapshot.sampleLimit, deadlineAt: Date.now() + 90_000, metrics: collectionMetrics };
   let discovery;
-  try { discovery = ZoneDiscoverySchema.parse(await client.discoverZone(input)); }
+  try { discovery = ScopedDiscoverySchema.parse(await client.discoverZone(input)); }
   catch (error) {
     const failure = toExternalFailure(error, "cloudflare");
     return { status: "collection_failed", message, errorCode: failure.errorCode, failure, collectionMetrics };
   }
+  const decision = decideSuppression(discovery);
+  if (decision.kind === "suppress") return { status: "suppressed", message, discovery, reason: decision.reason, collectionMetrics };
+  if (decision.kind === "degrade") return { status: "suppression_ineligible", message, discovery, reason: decision.reason, collectionMetrics };
   const selection = selectHosts(discovery, message.configSnapshot.hostLimit);
   const selected = discovery.zoneTotalEvents === 0 ? [] : selection.hosts;
   const results: HostCollection[] = [];
@@ -35,7 +40,7 @@ export async function analyzeHostWafAlert(message: QueueMessage, client: HostAna
         results[index] = parsed.data;
       } catch (error) {
         const classified = toExternalFailure(error, "cloudflare");
-        results[index] = { ...host, hostTotalEvents: null, aggregates: null, samples: [], samplesStatus: "not_requested", collectionStatus: "failed", errorCode: classified.errorCode,
+        results[index] = { ...ATTENTION_SCOPE, ...host, hostTotalEvents: null, aggregates: null, samples: [], samplesStatus: "not_requested", collectionStatus: "failed", errorCode: classified.errorCode,
           failure: { ...classified, externalService: "cloudflare" } };
       }
     }
@@ -46,7 +51,7 @@ export async function analyzeHostWafAlert(message: QueueMessage, client: HostAna
   const summary = summarizeCoverage(discovery.zoneTotalEvents, hosts, discoveryConsistent);
   const incident = HostIncidentSchema.parse({ ...message.alert, incidentId: message.incidentId, correlationId: message.correlationId,
     queryStartedAt: message.queryStartedAt, analysisWindow: message.analysisWindow,
-    hosts, zone: { ...summary, zoneTotalEvents: discovery.zoneTotalEvents, discoveredHosts: discovery.topHosts,
+    hosts, zone: { ...ATTENTION_SCOPE, rawTotalEvents: discovery.rawTotalEvents, blockedTotalEvents: discovery.blockedTotalEvents, countQuality: discovery.countQuality, ...summary, zoneTotalEvents: discovery.zoneTotalEvents, discoveredHosts: discovery.topHosts,
       selectedHostCount: selected.length, topHostsTruncated: selection.topHostsTruncated, invalidHostEvents: selection.invalidHostEvents } });
   const partial = !discoveryConsistent || summary.failedHostCount > 0 || summary.qualityFailedHostCount > 0 || summary.sampleFailedHostCount > 0 || summary.coverage.status === "inconsistent";
   return { status: partial ? "partial" : discovery.zoneTotalEvents === 0 ? "empty" : "success", message, incident, collectionMetrics };

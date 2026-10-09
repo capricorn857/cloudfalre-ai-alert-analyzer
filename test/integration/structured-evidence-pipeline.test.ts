@@ -21,6 +21,7 @@ async function consume(content: string, options: { transientLlm?: boolean; insuf
   if (zone === undefined) throw new Error("fixture");
   if (options.insufficient) zone.topCountries = [];
   if (options.empty) {
+    zone.rawTotal = []; zone.attentionTotal = []; zone.rawActions = [];
     zone.total = [{ count: 0 }]; zone.topIps = []; zone.topPaths = []; zone.topCountries = [];
     zone.topAsns = []; zone.topHosts = []; zone.actions = []; zone.sources = [];
   }

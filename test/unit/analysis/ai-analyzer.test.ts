@@ -1,3 +1,4 @@
+import { attentionCounts } from "../../fixtures/blocked-events";
 import { describe, expect, it, vi } from "vitest";
 import { runAIAnalysis } from "../../../src/analysis/ai-analyzer";
 import { analyzeWafAlert } from "../../../src/analyzers/waf-analyzer";
@@ -8,7 +9,7 @@ import { rememberCompletionDiagnostics } from "../../../src/observability/ai-dia
 import { AppError } from "../../../src/observability/errors";
 
 async function collect() {
-  return analyzeWafAlert(structuredClone(queueMessage), { discoverZone: () => Promise.resolve({ zoneTotalEvents: 400, topHosts: [{ host: "example.test", count: 400 }] }), collectHostSnapshot: () => Promise.resolve(hostFromSnapshot(snapshot)) }, rulesConfig);
+  return analyzeWafAlert(structuredClone(queueMessage), { discoverZone: () => Promise.resolve({ ...attentionCounts(400), topHosts: [{ host: "example.test", count: 400 }] }), collectHostSnapshot: () => Promise.resolve(hostFromSnapshot(snapshot)) }, rulesConfig);
 }
 describe("runAIAnalysis Host contract", () => {
   it("validates successful Host output and preserves catalog binding", async () => {
@@ -54,7 +55,7 @@ describe("runAIAnalysis Host contract", () => {
     const analyzeHosts = vi.fn();
     const failure = await analyzeWafAlert(queueMessage, { discoverZone: () => Promise.reject(new Error("failure")), collectHostSnapshot: vi.fn() }, rulesConfig);
     expect(await runAIAnalysis(failure, { analyzeHosts })).toMatchObject({ status: "unavailable", hosts: [] });
-    const empty = await analyzeWafAlert(queueMessage, { discoverZone: () => Promise.resolve({ zoneTotalEvents: 0, topHosts: [] }), collectHostSnapshot: vi.fn() }, rulesConfig);
+    const empty = await analyzeWafAlert(queueMessage, { discoverZone: () => Promise.resolve({ ...attentionCounts(0), topHosts: [] }), collectHostSnapshot: vi.fn() }, rulesConfig);
     expect(await runAIAnalysis(empty, { analyzeHosts })).toMatchObject({ status: "unavailable", hosts: [] });
     expect(analyzeHosts).not.toHaveBeenCalled();
   });

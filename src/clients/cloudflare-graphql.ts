@@ -1,3 +1,4 @@
+import { ATTENTION_SCOPE } from "../domain/event-scope";
 import {
   SamplesGraphQLResponseSchema,
   parseGraphQLData,
@@ -76,23 +77,31 @@ export class CloudflareGraphQLClient {
   async discoverZone(input: SnapshotCollectionInput): Promise<ZoneDiscovery> {
     const query = `query WafHostDiscovery($zoneTag: string!, $start: Time!, $end: Time!) {
       viewer { zones(filter: {zoneTag: $zoneTag}) {
-        total: firewallEventsAdaptiveGroups(limit: 1, filter: {datetime_geq: $start, datetime_leq: $end}) { count }
-        topHosts: firewallEventsAdaptiveGroups(limit: 10, orderBy: [count_DESC], filter: {datetime_geq: $start, datetime_leq: $end}) { count dimensions { clientRequestHTTPHost } }
+        rawTotal: firewallEventsAdaptiveGroups(limit: 1, filter: {datetime_geq: $start, datetime_leq: $end}) { count }
+        attentionTotal: firewallEventsAdaptiveGroups(limit: 1, filter: {datetime_geq: $start, datetime_leq: $end, action_neq: "block"}) { count }
+        rawActions: firewallEventsAdaptiveGroups(limit: 20, orderBy: [count_DESC], filter: {datetime_geq: $start, datetime_leq: $end}) { count dimensions { action } }
+        topHosts: firewallEventsAdaptiveGroups(limit: 10, orderBy: [count_DESC], filter: {datetime_geq: $start, datetime_leq: $end, action_neq: "block"}) { count dimensions { clientRequestHTTPHost } }
       } }
     }`;
     const data = parseGraphQLData(DiscoveryGraphQLResponseSchema, await this.request(query, {
       zoneTag: input.zoneTag, start: input.analysisWindow.start, end: input.analysisWindow.end,
-    }, input.deadlineAt, input.metrics, 2));
+    }, input.deadlineAt, input.metrics, 4));
     const zone = data.data.viewer.zones[0];
     if (zone === undefined) throw new AppError("cloudflare_response_invalid", "missing zone", false);
-    return ZoneDiscoverySchema.parse({ zoneTotalEvents: zone.total[0]?.count ?? 0,
+    const rawTotalEvents = zone.rawTotal[0]?.count ?? 0;
+    const rawActions = zone.rawActions.map((item) => ({ action: item.dimensions.action ?? null, count: item.count }));
+    const complete = rawActions.length < 20 && rawActions.reduce((sum, item) => sum + item.count, 0) === rawTotalEvents
+      && new Set(rawActions.map((item) => item.action)).size === rawActions.length;
+    const blockedTotalEvents = complete ? rawActions.filter((item) => item.action === "block").reduce((sum, item) => sum + item.count, 0) : null;
+    return ZoneDiscoverySchema.parse({ ...ATTENTION_SCOPE, rawTotalEvents, rawActions, blockedTotalEvents,
+      countQuality: "estimated", zoneTotalEvents: zone.attentionTotal[0]?.count ?? 0,
       topHosts: zone.topHosts.map((item) => ({ host: item.dimensions.clientRequestHTTPHost, count: item.count })),
     });
   }
 
   async collectHostSnapshot(input: SnapshotCollectionInput, selected: SelectedHost): Promise<HostCollection> {
     const variables = { zoneTag: input.zoneTag, start: input.analysisWindow.start, end: input.analysisWindow.end, host: selected.host };
-    const filter = "{datetime_geq: $start, datetime_leq: $end, clientRequestHTTPHost: $host}";
+    const filter = "{datetime_geq: $start, datetime_leq: $end, clientRequestHTTPHost: $host, action_neq: \"block\"}";
     const dimensions = [ ["topIps", "clientIP", 10], ["topPaths", "clientRequestPath", 10],
       ["topCountries", "clientCountryName", 10], ["topAsns", "clientAsn", 10],
       ["actions", "action", 20], ["sources", "source", 20] ] as const;
@@ -107,17 +116,18 @@ export class CloudflareGraphQLClient {
       const data = parseGraphQLData(HostGraphQLResponseSchema, await this.request(query, variables, input.deadlineAt, input.metrics, 7));
       const zone = data.data.viewer.zones[0];
       if (zone === undefined) throw new AppError("cloudflare_response_invalid", "missing zone", false);
+      if (zone.actions.some((item) => item.dimensions.action === "block")) throw new AppError("cloudflare_response_invalid", "blocked aggregate contamination", false);
       const total = zone.total[0]?.count ?? 0;
-      base = HostCollectionSchema.parse({ ...selected, collectionStatus: total > 0 ? "success" : "empty",
+      base = HostCollectionSchema.parse({ ...selected, ...ATTENTION_SCOPE, collectionStatus: total > 0 ? "success" : "empty",
         hostTotalEvents: total, aggregates: {
           topIps: toEvidence(zone.topIps, "clientIP"), topPaths: toEvidence(zone.topPaths, "clientRequestPath"),
           topCountries: toEvidence(zone.topCountries, "clientCountryName"),
           topAsns: toEvidence(zone.topAsns, "clientAsn").map((item) => ({ ...item, value: item.value.startsWith("AS") ? item.value : `AS${item.value}` })),
-          actions: toEvidence(zone.actions, "action"), sources: toEvidence(zone.sources, "source"),
+          actions: zone.actions.map((item) => ({ value: item.dimensions.action == null || item.dimensions.action === "" ? "unknown" : item.dimensions.action, count: item.count })), sources: toEvidence(zone.sources, "source"),
         }, samples: [], samplesStatus: "not_requested",
       });
     } catch (error) {
-      return HostCollectionSchema.parse({ ...selected, collectionStatus: "failed", hostTotalEvents: null,
+      return HostCollectionSchema.parse({ ...selected, ...ATTENTION_SCOPE, collectionStatus: "failed", hostTotalEvents: null,
         aggregates: null, samples: [], samplesStatus: "not_requested", errorCode: classifyUnknownError(error, "cloudflare").code, failure: toExternalFailure(error, "cloudflare") });
     }
     try {
@@ -130,9 +140,9 @@ export class CloudflareGraphQLClient {
       }`;
       const data = parseGraphQLData(SamplesGraphQLResponseSchema, await this.request(samplesQuery, { ...variables, sampleLimit: input.sampleLimit }, input.deadlineAt, input.metrics, 1));
       const samples = data.data.viewer.zones[0]?.samples;
-      if (samples === undefined || samples.some((sample) => sample.clientRequestHTTPHost !== selected.host)) throw new AppError("cloudflare_response_invalid", "invalid samples", false);
+      if (samples === undefined || samples.some((sample) => sample.clientRequestHTTPHost !== selected.host || sample.action === "block")) throw new AppError("cloudflare_response_invalid", "invalid samples", false);
       return HostCollectionSchema.parse({ ...base, samplesStatus: "success", samples: samples.slice(0, input.sampleLimit).map((sample) => ({
-        datetime: new Date(sample.datetime).toISOString(), action: sample.action, clientIP: sample.clientIP,
+        datetime: new Date(sample.datetime).toISOString(), action: sample.action == null || sample.action === "" ? "unknown" : sample.action, clientIP: sample.clientIP,
         clientCountryName: sample.clientCountryName ?? null, clientAsn: sample.clientAsn == null ? null : String(sample.clientAsn),
         clientRequestHTTPHost: sample.clientRequestHTTPHost, clientRequestPath: sample.clientRequestPath ?? null,
         source: sample.source ?? null, userAgent: sample.userAgent ?? null,

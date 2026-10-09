@@ -1,0 +1,518 @@
+{
+  "source": "https://api.cloudflare.com/client/v4/graphql",
+  "verifiedAt": "2026-10-09",
+  "verificationMethod": "authenticated_introspection",
+  "status": "verified_guarded_contract",
+  "credentialStored": false,
+  "resourceIdentifiersRedacted": true,
+  "actualEventsRead": false,
+  "types": {
+    "ZoneFirewallEventsAdaptiveGroupsFilter_InputObject": {
+      "description": "",
+      "fields": [
+        {
+          "description": "",
+          "name": "AND",
+          "type": {
+            "kind": "LIST",
+            "name": "",
+            "ofType": {
+              "kind": "NON_NULL",
+              "name": "",
+              "ofType": {
+                "kind": "INPUT_OBJECT",
+                "name": "ZoneFirewallEventsAdaptiveGroupsFilter_InputObject"
+              }
+            }
+          }
+        },
+        {
+          "description": "",
+          "name": "OR",
+          "type": {
+            "kind": "LIST",
+            "name": "",
+            "ofType": {
+              "kind": "NON_NULL",
+              "name": "",
+              "ofType": {
+                "kind": "INPUT_OBJECT",
+                "name": "ZoneFirewallEventsAdaptiveGroupsFilter_InputObject"
+              }
+            }
+          }
+        },
+        {
+          "description": "",
+          "name": "action",
+          "type": {
+            "kind": "SCALAR",
+            "name": "string",
+            "ofType": null
+          }
+        },
+        {
+          "description": "",
+          "name": "action_in",
+          "type": {
+            "kind": "LIST",
+            "name": "",
+            "ofType": {
+              "kind": "NON_NULL",
+              "name": "",
+              "ofType": {
+                "kind": "SCALAR",
+                "name": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "",
+          "name": "action_neq",
+          "type": {
+            "kind": "SCALAR",
+            "name": "string",
+            "ofType": null
+          }
+        },
+        {
+          "description": "",
+          "name": "action_notin",
+          "type": {
+            "kind": "LIST",
+            "name": "",
+            "ofType": {
+              "kind": "NON_NULL",
+              "name": "",
+              "ofType": {
+                "kind": "SCALAR",
+                "name": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "",
+          "name": "sampleInterval",
+          "type": {
+            "kind": "SCALAR",
+            "name": "uint32",
+            "ofType": null
+          }
+        },
+        {
+          "description": "",
+          "name": "sampleInterval_gt",
+          "type": {
+            "kind": "SCALAR",
+            "name": "uint32",
+            "ofType": null
+          }
+        }
+      ],
+      "nullOperatorNames": []
+    },
+    "ZoneFirewallEventsAdaptiveFilter_InputObject": {
+      "description": "",
+      "fields": [
+        {
+          "description": "",
+          "name": "AND",
+          "type": {
+            "kind": "LIST",
+            "name": "",
+            "ofType": {
+              "kind": "NON_NULL",
+              "name": "",
+              "ofType": {
+                "kind": "INPUT_OBJECT",
+                "name": "ZoneFirewallEventsAdaptiveFilter_InputObject"
+              }
+            }
+          }
+        },
+        {
+          "description": "",
+          "name": "OR",
+          "type": {
+            "kind": "LIST",
+            "name": "",
+            "ofType": {
+              "kind": "NON_NULL",
+              "name": "",
+              "ofType": {
+                "kind": "INPUT_OBJECT",
+                "name": "ZoneFirewallEventsAdaptiveFilter_InputObject"
+              }
+            }
+          }
+        },
+        {
+          "description": "",
+          "name": "action",
+          "type": {
+            "kind": "SCALAR",
+            "name": "string",
+            "ofType": null
+          }
+        },
+        {
+          "description": "",
+          "name": "action_in",
+          "type": {
+            "kind": "LIST",
+            "name": "",
+            "ofType": {
+              "kind": "NON_NULL",
+              "name": "",
+              "ofType": {
+                "kind": "SCALAR",
+                "name": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "",
+          "name": "action_neq",
+          "type": {
+            "kind": "SCALAR",
+            "name": "string",
+            "ofType": null
+          }
+        },
+        {
+          "description": "",
+          "name": "action_notin",
+          "type": {
+            "kind": "LIST",
+            "name": "",
+            "ofType": {
+              "kind": "NON_NULL",
+              "name": "",
+              "ofType": {
+                "kind": "SCALAR",
+                "name": "string"
+              }
+            }
+          }
+        },
+        {
+          "description": "",
+          "name": "sampleInterval",
+          "type": {
+            "kind": "SCALAR",
+            "name": "uint32",
+            "ofType": null
+          }
+        },
+        {
+          "description": "",
+          "name": "sampleInterval_gt",
+          "type": {
+            "kind": "SCALAR",
+            "name": "uint32",
+            "ofType": null
+          }
+        }
+      ],
+      "nullOperatorNames": []
+    },
+    "ZoneFirewallEventsAdaptiveGroups": {
+      "description": "Aggregated Firewall events with adaptive sampling",
+      "fields": [
+        {
+          "description": "The average value used for sample interval",
+          "name": "avg",
+          "type": {
+            "kind": "OBJECT",
+            "name": "ZoneFirewallEventsAdaptiveGroupsAvg",
+            "ofType": null
+          }
+        },
+        {
+          "description": "ALPHA - DO NOT USE",
+          "name": "confidence",
+          "type": {
+            "kind": "NON_NULL",
+            "name": "",
+            "ofType": {
+              "kind": "OBJECT",
+              "name": "ZoneFirewallEventsAdaptiveGroupsConfidence",
+              "ofType": null
+            }
+          }
+        },
+        {
+          "description": "The sum of sample interval values",
+          "name": "count",
+          "type": {
+            "kind": "NON_NULL",
+            "name": "",
+            "ofType": {
+              "kind": "SCALAR",
+              "name": "uint64",
+              "ofType": null
+            }
+          }
+        }
+      ],
+      "nullOperatorNames": []
+    },
+    "ZoneFirewallEventsAdaptiveGroupsAvg": {
+      "description": "",
+      "fields": [
+        {
+          "description": "",
+          "name": "sampleInterval",
+          "type": {
+            "kind": "NON_NULL",
+            "name": "",
+            "ofType": {
+              "kind": "SCALAR",
+              "name": "float64",
+              "ofType": null
+            }
+          }
+        }
+      ],
+      "nullOperatorNames": []
+    },
+    "ZoneFirewallEventsAdaptiveGroupsDimensions": {
+      "description": "",
+      "fields": [
+        {
+          "description": "The code of the first-class action the Cloudflare Firewall took on this request",
+          "name": "action",
+          "type": {
+            "kind": "NON_NULL",
+            "name": "",
+            "ofType": {
+              "kind": "SCALAR",
+              "name": "string",
+              "ofType": null
+            }
+          }
+        },
+        {
+          "description": "ABR sample interval",
+          "name": "sampleInterval",
+          "type": {
+            "kind": "NON_NULL",
+            "name": "",
+            "ofType": {
+              "kind": "SCALAR",
+              "name": "uint32",
+              "ofType": null
+            }
+          }
+        }
+      ],
+      "nullOperatorNames": []
+    },
+    "ZoneFirewallEventsAdaptive": {
+      "description": "Raw Firewall events with adaptive sampling",
+      "fields": [
+        {
+          "description": "The code of the first-class action the Cloudflare Firewall took on this request",
+          "name": "action",
+          "type": {
+            "kind": "NON_NULL",
+            "name": "",
+            "ofType": {
+              "kind": "SCALAR",
+              "name": "string",
+              "ofType": null
+            }
+          }
+        },
+        {
+          "description": "ABR sample interval",
+          "name": "sampleInterval",
+          "type": {
+            "kind": "NON_NULL",
+            "name": "",
+            "ofType": {
+              "kind": "SCALAR",
+              "name": "uint32",
+              "ofType": null
+            }
+          }
+        }
+      ],
+      "nullOperatorNames": []
+    }
+  },
+  "verified": [
+    "Action equality/inequality and AND/OR input fields exist on both WAF datasets",
+    "Action outputs are string!",
+    "Aggregate count description is sum of sample interval values",
+    "Aggregate avg.sampleInterval and per-event sampleInterval fields exist",
+    "Target Zone settings expose required fields and allow planned limits",
+    "Four discovery aliases accepted with positive raw/block counts and empty attention aggregate/ranking",
+    "In observed aggregate data, equality/inequality distinguish block from BLOCK and block with trailing whitespace",
+    "Empty-string and future unknown-string filter arguments accepted",
+    "Contradictory exact block AND not-block returns empty aggregate",
+    "Final four-alias rawActions guard query accepted on target fixed window; unknown/null query semantics not assumed, runtime fail-closed guard independently tested"
+  ],
+  "policyDecision": {
+    "acceptedAt": "2026-10-09",
+    "policyId": "exclude-exact-block-v1",
+    "observationBasis": "adaptive_aggregate",
+    "suppressionReason": "no_attention_events_observed",
+    "samplingRiskAccepted": true,
+    "fullCoverageProofRequired": false,
+    "limitation": "Valid aggregate observation zero can miss rare non-block events; no claim that all underlying requests were blocked."
+  },
+  "samplingNotes": [
+    "No full-window completeness proof is claimed.",
+    "confidence is marked ALPHA - DO NOT USE in authenticated schema; it is not used."
+  ],
+  "targetZoneVerification": {
+    "verifiedAt": "2026-10-09T05:32:23.246181+00:00",
+    "zoneIdentifierStored": false,
+    "zoneNameStored": false,
+    "window": {
+      "start": "2026-10-09T04:57:21.551930+00:00",
+      "end": "2026-10-09T05:27:21.551930+00:00"
+    },
+    "settings": {
+      "firewallEventsAdaptive": {
+        "enabled": true,
+        "maxPageSize": 10000,
+        "maxNumberOfFields": 40,
+        "maxDuration": 2592000,
+        "notOlderThan": 2678400
+      },
+      "firewallEventsAdaptiveGroups": {
+        "enabled": true,
+        "maxPageSize": 10000,
+        "maxNumberOfFields": 30,
+        "maxDuration": 259200,
+        "notOlderThan": 2678400
+      }
+    },
+    "fourAliasAccepted": true,
+    "counts": {
+      "raw": 378,
+      "attention": 0,
+      "blocked": 378
+    },
+    "attentionTopHostCount": 0,
+    "observedActions": [
+      "block"
+    ],
+    "sampleCount": 0,
+    "limitations": [
+      "Observed window contains only block events; mixed-event ranking and unknown/missing action preservation are not proven.",
+      "Settings expose all currently planned aggregate and sample fields."
+    ]
+  },
+  "actionSemanticProbes": {
+    "upper_equal": {
+      "graphqlErrors": false,
+      "groups": []
+    },
+    "upper_neq": {
+      "graphqlErrors": false,
+      "groups": [
+        {
+          "count": 378
+        }
+      ]
+    },
+    "space_equal": {
+      "graphqlErrors": false,
+      "groups": []
+    },
+    "space_neq": {
+      "graphqlErrors": false,
+      "groups": [
+        {
+          "count": 378
+        }
+      ]
+    },
+    "null_equal": {
+      "graphqlErrors": true
+    },
+    "null_neq": {
+      "graphqlErrors": true
+    },
+    "empty_equal": {
+      "graphqlErrors": false,
+      "groups": []
+    },
+    "empty_neq": {
+      "graphqlErrors": false,
+      "groups": [
+        {
+          "count": 378
+        }
+      ]
+    },
+    "unknown_neq": {
+      "graphqlErrors": false,
+      "groups": [
+        {
+          "count": 378
+        }
+      ]
+    },
+    "contradiction": {
+      "graphqlErrors": false,
+      "groups": []
+    },
+    "null_or": {
+      "graphqlErrors": true
+    }
+  },
+  "guardQueryVerification": {
+    "fourAliasGuardAccepted": true,
+    "rawTotal": [
+      {
+        "count": 378
+      }
+    ],
+    "attentionTotal": [],
+    "rawActions": [
+      {
+        "count": 378,
+        "dimensions": {
+          "action": "block"
+        }
+      }
+    ],
+    "topHostCount": 0,
+    "window": {
+      "start": "2026-10-09T04:57:21.551930+00:00",
+      "end": "2026-10-09T05:27:21.551930+00:00"
+    }
+  },
+  "runtimeProtection": {
+    "nullNegationAssumed": false,
+    "aliases": [
+      "rawTotal",
+      "attentionTotal",
+      "rawActions",
+      "topHosts"
+    ],
+    "rawActionsLimit": 20,
+    "unknownActionPolicy": "degrade_before_host_or_ai",
+    "requiresCompleteDistinctRawActions": true,
+    "compareRawAndAttentionAgainstRawActions": true,
+    "blockedCountSource": "exact block group in complete rawActions",
+    "samplingRiskAccepted": true
+  },
+  "limitations": [
+    "Preservation of underlying null/missing Action by inequality on both datasets",
+    "Mixed-event filtered-ranking counterexample on target Zone",
+    "Sample dataset equality/inequality runtime semantics with nonempty observations"
+  ],
+  "historicalBlockingFindings": [
+    "Both input schemas have no dedicated null predicate; aggregate action:null, action_neq:null and OR with action:null returned GraphQL errors.",
+    "Current successful samples are empty and observed actions are block only; these cannot prove behavior for missing or future action records.",
+    "The approved design explicitly forbids treating output string! alone as proof that underlying missing Action cannot be lost by negation."
+  ]
+}

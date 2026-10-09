@@ -1,3 +1,5 @@
+import { ATTENTION_SCOPE } from "../../../src/domain/event-scope";
+import { attentionCounts } from "../../fixtures/blocked-events";
 import { describe, expect, it } from "vitest";
 import { analyzeHost, summarizeCoverage, selectHosts } from "../../../src/analysis/host-analysis";
 import { makeHost, hostWindow } from "../../fixtures/host-analysis";
@@ -7,7 +9,7 @@ describe("independent Host analysis", () => {
   it("keeps same paths, sources and denominators independent", () => {
     const a = analyzeHost(makeHost(), 1000, hostWindow, rulesConfig);
     const b = analyzeHost(makeHost("h1", "www.example.test", 300), 1000, hostWindow, rulesConfig);
-    expect(a.statistics).toMatchObject({ totalEvents: 600, hostId: "h0", zoneShare: 60, topPath: { ratio: 50 }, userAgentConcentration: { ratio: 60 }, nonEmptyUaSampleCount: 10, blockRatio: 100 });
+    expect(a.statistics).toMatchObject({ totalEvents: 600, hostId: "h0", zoneShare: 60, topPath: { ratio: 50 }, userAgentConcentration: { ratio: 60 }, nonEmptyUaSampleCount: 10, blockRatio: 0 });
     expect(b.statistics).toMatchObject({ totalEvents: 300, hostId: "h1", zoneShare: 30, topPath: { ratio: 10 }, allowRatio: 100 });
     expect(a.statistics?.requestRatePerSecond).toBeCloseTo(600 / 1860);
     expect(a.findings.every((finding) => finding.hostId === "h0")).toBe(true);
@@ -15,14 +17,14 @@ describe("independent Host analysis", () => {
   });
   it("retains successful host coverage while failures remain unknown", () => {
     const good = analyzeHost(makeHost(), 1000, hostWindow, rulesConfig);
-    const failed = analyzeHost({ hostId: "h1", host: "www.example.test", discoveryCount: 300, hostTotalEvents: null, aggregates: null, samples: [], samplesStatus: "not_requested", collectionStatus: "failed", errorCode: "cloudflare_timeout" }, 1000, hostWindow, rulesConfig);
+    const failed = analyzeHost({ ...ATTENTION_SCOPE, hostId: "h1", host: "www.example.test", discoveryCount: 300, hostTotalEvents: null, aggregates: null, samples: [], samplesStatus: "not_requested", collectionStatus: "failed", errorCode: "cloudflare_timeout" }, 1000, hostWindow, rulesConfig);
     expect(failed.statistics).toBeNull();
     expect(summarizeCoverage(1000, [good, failed])).toMatchObject({ analyzedHostCount: 1, failedHostCount: 1, coverage: { ratio: 60 } });
   });
   it("does not normalize inconsistent aggregates or compare mismatched discovery totals", () => {
     const raw = makeHost();
     if (!raw.aggregates) throw new Error("fixture aggregates missing");
-    raw.aggregates.actions[0] = { value: "block", count: 601 };
+    raw.aggregates.actions[0] = { value: "log", count: 601 };
     raw.discoveryCount = 610;
     const a = analyzeHost(raw, 1000, hostWindow, rulesConfig);
     expect(a.statistics?.blockRatio).toBeNull();
@@ -31,7 +33,7 @@ describe("independent Host analysis", () => {
     expect(summarizeCoverage(1000, [a]).coverage).toMatchObject({ ratio: null, status: "inconsistent" });
   });
   it("selects bounded positive nonempty hosts deterministically", () => {
-    expect(selectHosts({ zoneTotalEvents: 100, topHosts: [{ host: null, count: 40 }, { host: "b.test", count: 20 }, { host: "a.test", count: 20 }, { host: " ", count: 10 }, { host: "c.test", count: 0 }] }, 1)).toMatchObject({
+    expect(selectHosts({ ...attentionCounts(100), topHosts: [{ host: null, count: 40 }, { host: "b.test", count: 20 }, { host: "a.test", count: 20 }, { host: " ", count: 10 }, { host: "c.test", count: 0 }] }, 1)).toMatchObject({
       hosts: [{ hostId: "h0", host: "a.test", discoveryCount: 20 }], topHostsTruncated: true, invalidHostEvents: 50,
     });
   });
@@ -68,7 +70,7 @@ describe("independent Host analysis", () => {
     expect(result.findings.find((finding) => finding.type === "path_concentration")?.level).toBe("unknown");
   });
   it("reports top-ten truncation without inferring the full Host count", () => {
-    const selection = selectHosts({ zoneTotalEvents: 2000, topHosts: Array.from({ length: 10 }, (_, index) => ({ host: "h" + String(index) + ".test", count: 100 })) }, 3);
+    const selection = selectHosts({ ...attentionCounts(2000), topHosts: Array.from({ length: 10 }, (_, index) => ({ host: "h" + String(index) + ".test", count: 100 })) }, 3);
     expect(selection.hosts).toHaveLength(3);
     expect(selection.topHostsTruncated).toBe(true);
     expect(selection).not.toHaveProperty("totalHosts");

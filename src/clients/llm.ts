@@ -77,6 +77,7 @@ export class LLMClient {
             role: "system",
             content:
               "Return schema_version 3 with exactly one result per requested hostIds entry. Every reference, total, context, statistic and finding must belong to that same host. Zone evidence cannot support Host claims. Never infer joint ASN/IP/path relationships.\n" +
+              "The Catalog contains attention-only events under exclude-exact-block-v1: exact action=block was excluded before ranking. All denominators and samples refer to this scope. Non-block actions do not prove attack success or that requests reached the origin. Unknown Actions remain unknown.\n" +
               "Analyze only the supplied Evidence Catalog. Do not query Cloudflare, recalculate statistics, invent facts, repeat entity values, add free text, or claim an action was executed.\n" +
               "Each risk, attack, observation, and recommendation must cite its own evidence_ids. Use only catalog IDs and exactly the roles below; do not add unrelated evidence. Do not infer relationships between aggregate entries. Samples support only one observed event and never aggregate proportions.\n" +
               "Risk rules:\n" +

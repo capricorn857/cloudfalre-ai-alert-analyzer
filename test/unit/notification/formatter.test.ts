@@ -1,3 +1,4 @@
+import { attentionCounts } from "../../fixtures/blocked-events";
 import { describe, expect, it } from "vitest";
 import { formatWeComMessage } from "../../../src/notification/formatter";
 import { analyzeHostWafAlert } from "../../../src/analyzers/waf-analyzer";
@@ -11,7 +12,7 @@ import type { MultiHostAIResponse } from "../../../src/domain/ai-analysis";
 const options = { timeZone: "Asia/Shanghai", maxLength: 3500, topLimit: 3 };
 async function resultFor(raw: HostCollection = hostFromSnapshot(snapshot), output: MultiHostAIResponse = makeHostAIResponse()) {
   const result = await analyzeHostWafAlert(queueMessage, {
-    discoverZone: () => Promise.resolve({ zoneTotalEvents: raw.discoveryCount, topHosts: [{ host: raw.host, count: raw.discoveryCount }] }),
+    discoverZone: () => Promise.resolve({ ...attentionCounts(raw.discoveryCount), topHosts: raw.discoveryCount === 0 ? [] : [{ host: raw.host, count: raw.discoveryCount }] }),
     collectHostSnapshot: () => Promise.resolve(raw),
   }, rulesConfig);
   return { snapshot: result, ai: await runHostAIAnalysis(result, { analyzeHosts: () => Promise.resolve(output) }) };

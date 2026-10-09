@@ -105,7 +105,8 @@ describe("full Worker pipeline", () => {
     expect(message.ack).toHaveBeenCalledOnce();
     expect(message.retry).not.toHaveBeenCalled();
     expect(sentMessage).toContain("incident_id: correlation-123");
-    expect(sentMessage).toContain("快照事件: 400");
+    expect(sentMessage).toContain("已排除 action=block");
+    expect(sentMessage).toContain("400");
   });
 
   it("acks final WeCom failure without replaying GraphQL or AI", async () => {

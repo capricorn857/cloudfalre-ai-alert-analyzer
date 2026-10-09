@@ -1,3 +1,5 @@
+import { EventScopeSchema } from "../domain/event-scope";
+import { AppError } from "../observability/errors";
 import type { HostSnapshotAnalysisResult } from "../domain/analysis-result";
 import type { HostAIAnalysisResult } from "../analysis/ai-analyzer";
 import type { HostAnalysis } from "../domain/host-analysis";
@@ -19,38 +21,41 @@ function dashboardUrl(value: string | undefined): string {
 
 function protection(host: HostAnalysis): string {
   const stats = host.statistics;
-  if (stats === null) return "防护: 未知";
-  const blockCount = host.collection.aggregates?.actions.filter((item) => item.value === "block").reduce((sum, item) => sum + item.count, 0);
-  if (host.quality.actionsComplete && stats.totalEvents > 0 && blockCount === stats.totalEvents) return "防护: 本 Host 快照事件全部标记为 block";
-  if (!host.quality.actionsComplete || stats.totalEvents === 0) return "防护: 处理分布未完整获取";
-  return `防护: block ${percentage(stats.blockRatio)}；allow ${percentage(stats.allowRatio)}；challenge ${percentage(stats.challengeRatio)}`;
+  if (stats === null) return "待关注事件处理分布: 未知";
+  if (!host.quality.actionsComplete || stats.totalEvents === 0) return "待关注事件处理分布: 未完整获取";
+  return `待关注事件处理分布: allow ${percentage(stats.allowRatio)}；challenge ${percentage(stats.challengeRatio)}；其他动作保留`;
 }
 
 export function formatHostWeComMessage(result: { snapshot: HostSnapshotAnalysisResult; ai: HostAIAnalysisResult }, options: FormatterOptions): string {
   const { snapshot, ai } = result;
+  if (snapshot.status === "suppressed") throw new AppError("notification_suppressed", "suppressed snapshots have no notification", false);
   const { message } = snapshot;
   const time = (value: string) => displayTime(value, options.timeZone);
   const adviceTitle = ai.status === "unavailable" ? "规则分析处理建议" : "人工核验处理建议";
   const advice = `${adviceTitle}:\n按相同窗口人工核验 Cloudflare Dashboard：\n${dashboardUrl(message.alert.dashboardLink)}`;
   const footer = [
-    "各排名相互独立，事件可能采样。",
+    "各排名相互独立，事件可能采样。非block不代表攻击成功或已到达源站。",
     `告警时间: ${time(message.alert.alertTime)}`,
     `分析窗口: ${time(message.analysisWindow.start)} - ${time(message.analysisWindow.end)}`,
     `数据截至: ${time(message.analysisWindow.end)}`,
   ];
   // Identifiers may use a lossless encoding, but are never omitted or truncated.
   const identifiers = [`incident_id: ${escapeIdentifier(message.incidentId)}`, `correlation_id: ${escapeIdentifier(message.correlationId)}`];
-  if (snapshot.status === "collection_failed") return assembleBlocks([
-    { required: `【Cloudflare WAF 告警】\nZone: ${escapeValue(message.alert.resource)}\nCloudflare 数据采集失败；AI 不可用`, compact: "【Cloudflare WAF 告警】\nZone: [名称已省略]\nCloudflare 数据采集失败；AI 不可用", optional: [] },
+  if (!("incident" in snapshot)) {
+    const failureText = snapshot.status === "suppression_ineligible" ? (snapshot.reason === "action_unknown" ? "部分事件处理动作未知，无法可靠保留待关注范围；AI 不可用" : "数据口径不一致，无法可靠判断待关注事件；AI 不可用") : "Cloudflare 数据采集失败；AI 不可用";
+    return assembleBlocks([
+    { required: `【Cloudflare WAF 告警】\nZone: ${escapeValue(message.alert.resource)}\n${failureText}`, compact: "【Cloudflare WAF 告警】\nZone: [名称已省略]\n" + failureText, optional: [] },
     { required: advice, optional: [] },
     { required: [...footer, "覆盖: 未知", ...identifiers].join("\n"), optional: [] },
   ], options.maxLength);
+  }
   const { incident } = snapshot;
   const zone = incident.zone;
+  if (!EventScopeSchema.safeParse(zone).success || incident.hosts.some(({ collection }) => !EventScopeSchema.safeParse(collection).success || (collection.aggregates?.actions.some((item) => item.value === "block") ?? false) || collection.samples.some((sample) => sample.action === "block"))) throw new AppError("notification_scope_invalid", "invalid attention scope", false);
   let catalogMatches = false;
   try { catalogMatches = ai.catalog !== undefined && JSON.stringify(ai.catalog) === JSON.stringify(buildHostEvidenceCatalog({ message, zoneTotalEvents: zone.zoneTotalEvents, hosts: incident.hosts })); } catch { /* Invalid AI projection uses the rule fallback. */ }
   const suggestions: string[] = [];
-  const sections: MessageSection[] = [{ required: `【Cloudflare WAF 告警】\nZone: ${escapeValue(incident.resource)}；快照事件: ${String(zone.zoneTotalEvents)}`, compact: `【Cloudflare WAF 告警】\nZone: [名称已省略]；快照事件: ${String(zone.zoneTotalEvents)}`, optional: [] }];
+  const sections: MessageSection[] = [{ required: `【Cloudflare WAF 告警】\nZone: ${escapeValue(incident.resource)}；待关注事件（已排除 action=block）: ${String(zone.zoneTotalEvents)}`, compact: `【Cloudflare WAF 告警】\nZone: [名称已省略]；待关注事件（已排除 action=block）: ${String(zone.zoneTotalEvents)}`, optional: [] }];
   const sorted = [...incident.hosts].sort((a, b) => attentionOrder[a.ruleAttention] - attentionOrder[b.ruleAttention] || b.collection.discoveryCount - a.collection.discoveryCount || (a.collection.host < b.collection.host ? -1 : a.collection.host > b.collection.host ? 1 : 0));
   for (const [index, host] of sorted.entries()) {
     const heading = `${hostNumbers[index] ?? String(index + 1)}：Host:`;
@@ -63,6 +68,7 @@ export function formatHostWeComMessage(result: { snapshot: HostSnapshotAnalysisR
     else if (collection.samplesStatus === "failed") status.push("样本采集失败");
     if (!host.quality.aggregateConsistent && stats !== null) status.push("数据不完整");
     if (!host.quality.discoveryConsistent && stats !== null) status.push("聚合口径不一致");
+    if (collection.aggregates?.actions.some((item) => item.value === "unknown") || collection.samples.some((sample) => sample.action === "unknown")) status.push("部分处理动作未知");
     if (stats?.totalEvents === 0) status.push("零事件，数据不足");
     if (validated === undefined) status.push("AI 降级，使用规则分析");
     const judgement = validated?.wire.attack.type === "Bot" ? [`疑似自动化特征（Bot，待人工核验）；模型自评 ${String(validated.wire.attack.confidence)}，非攻击概率`] : [];
@@ -75,10 +81,10 @@ export function formatHostWeComMessage(result: { snapshot: HostSnapshotAnalysisR
     else if (collection.samplesStatus === "failed") compactStatus.push("样本采集失败");
     if (!host.quality.aggregateConsistent && stats !== null) compactStatus.push("数据不完整");
     if (!host.quality.discoveryConsistent && stats !== null) compactStatus.push("口径不一致");
+    if (collection.aggregates?.actions.some((item) => item.value === "unknown") || collection.samples.some((sample) => sample.action === "unknown")) compactStatus.push("部分处理动作未知");
     if (stats?.totalEvents === 0) compactStatus.push("零事件，数据不足");
     if (validated === undefined) compactStatus.push("AI 降级");
-    const compactProtection = stats === null ? "防护: 未知" : !host.quality.actionsComplete || stats.totalEvents === 0 ? "防护: 未知（分布不完整）"
-      : `防护（快照）: block ${percentage(stats.blockRatio)}；allow ${percentage(stats.allowRatio)}；challenge ${percentage(stats.challengeRatio)}`;
+    const compactProtection = protection(host);
     const omittedName = `${collection.hostId}（名称已省略）`;
     const compactName = new TextEncoder().encode(name).byteLength <= new TextEncoder().encode(omittedName).byteLength ? name : omittedName;
     const compact = [`${heading} ${compactName}`, compactProtection, ...(host.ruleAttention === "LOW" ? ["未命中当前关注规则，不代表安全。"] : []), ...compactStatus].join("\n");

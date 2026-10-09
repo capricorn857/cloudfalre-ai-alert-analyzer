@@ -1,3 +1,4 @@
+import { attentionCounts } from "../../fixtures/blocked-events";
 import { describe, expect, it, vi } from "vitest";
 import { runHostAIAnalysis } from "../../../src/analysis/ai-analyzer";
 import { analyzeHostWafAlert } from "../../../src/analyzers/waf-analyzer";
@@ -8,7 +9,7 @@ import type { HostAIAnalysisWire } from "../../../src/domain/ai-analysis";
 const unknown = (hostId: string): HostAIAnalysisWire => ({ host_id: hostId, risk: { level: "Unknown", evidence_ids: [] }, attack: { type: "Unknown", confidence: 0, evidence_ids: [] }, observations: [], recommendations: [{ kind: "manual_dashboard", evidence_ids: [`${hostId}:ctx:0`] }] });
 async function snapshot() {
   return analyzeHostWafAlert(queueMessage, {
-    discoverZone: () => Promise.resolve({ zoneTotalEvents: 1000, topHosts: [{ host: "example.test", count: 600 }, { host: "www.example.test", count: 300 }] }),
+    discoverZone: () => Promise.resolve({ ...attentionCounts(1000), topHosts: [{ host: "example.test", count: 600 }, { host: "www.example.test", count: 300 }] }),
     collectHostSnapshot: (_input, host) => Promise.resolve(makeHost(host.hostId, host.host, host.discoveryCount)),
   }, rulesConfig);
 }

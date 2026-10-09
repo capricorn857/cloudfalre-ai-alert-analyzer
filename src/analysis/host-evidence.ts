@@ -1,3 +1,4 @@
+import { ATTENTION_SCOPE, EventScopeSchema } from "../domain/event-scope";
 import { HostEvidenceCatalogSchema, type HostEvidenceCatalog, type ScopedEvidenceEntry } from "../domain/host-evidence";
 import { HostAIAnalysisWireSchema, toAIAnalysis, type HostAIAnalysisWire } from "../domain/ai-analysis";
 import type { HostAnalysis } from "../domain/host-analysis";
@@ -12,6 +13,7 @@ const emptyOmissions = { aggregateItems: 0, samples: 0, oversizedValues: 0, depe
 
 function verifySource(host: HostAnalysis, message: QueueMessage): void {
   const { statistics: stats, collection, findings } = host;
+  if (!EventScopeSchema.safeParse(collection).success || collection.aggregates?.actions.some((item) => item.value === "block") || collection.samples.some((sample) => sample.action === "block")) throw validationError("ai_catalog_invalid", "catalog", "inconsistent_source");
   if (stats === null || collection.aggregates === null || stats.hostId !== collection.hostId || stats.totalEvents !== collection.hostTotalEvents || findings.some((finding) => finding.hostId !== collection.hostId)) throw validationError("ai_catalog_invalid", "catalog", "inconsistent_source");
   const ratio = (count: number, denominator: number) => Math.round(count / denominator * 100_000) / 1000;
   for (const [stat, items] of [[stats.topIp, collection.aggregates.topIps], [stats.topPath, collection.aggregates.topPaths], [stats.topCountry, collection.aggregates.topCountries], [stats.topAsn, collection.aggregates.topAsns]] as const) {
@@ -21,7 +23,7 @@ function verifySource(host: HostAnalysis, message: QueueMessage): void {
   if (stats.nonEmptyUaSampleCount !== nonEmpty.length) throw validationError("ai_catalog_invalid", "catalog", "inconsistent_source");
   if (stats.userAgentConcentration !== null && (stats.userAgentConcentration.count !== nonEmpty.filter((sample) => sample.userAgent === stats.userAgentConcentration?.value).length || stats.userAgentConcentration.ratio !== ratio(stats.userAgentConcentration.count, nonEmpty.length))) throw validationError("ai_catalog_invalid", "catalog", "inconsistent_source");
   for (const [stat, actions] of [[stats.allowRatio, ["allow"]], [stats.blockRatio, ["block"]], [stats.challengeRatio, ["challenge", "managed_challenge"]]] as const) {
-    const count = collection.aggregates.actions.filter((item) => (actions as readonly string[]).includes(item.value.toLowerCase())).reduce((sum, item) => sum + item.count, 0);
+    const count = collection.aggregates.actions.filter((item) => (actions as readonly string[]).includes(item.value)).reduce((sum, item) => sum + item.count, 0);
     if (stat !== null && stat !== ratio(count, stats.totalEvents)) throw validationError("ai_catalog_invalid", "catalog", "inconsistent_source");
   }
   const duration = (Date.parse(message.analysisWindow.end) - Date.parse(message.analysisWindow.start)) / 1000;
@@ -56,7 +58,7 @@ export function buildHostEvidenceCatalog(input: { message: QueueMessage; zoneTot
       const projected: ScopedEvidenceEntry[] = local.entries.filter((entry) => !(entry.type.startsWith("aggregate_") || entry.type === "sample") || Number(entry.id.split(":").at(-1)) < 5).map((entry) => {
         const value = entry.type === "finding" ? { ...entry.value, statId: `${hostId}:${entry.value.statId}` } : entry.value;
         const actionNames = entry.type === "stat_allow" ? ["allow"] : entry.type === "stat_block" ? ["block"] : entry.type === "stat_challenge" ? ["challenge", "managed_challenge"] : undefined;
-        const numerator = actionNames === undefined ? undefined : collection.aggregates?.actions.filter((item) => actionNames.includes(item.value.toLowerCase())).reduce((sum, item) => sum + item.count, 0);
+        const numerator = actionNames === undefined ? undefined : collection.aggregates?.actions.filter((item) => actionNames.includes(item.value)).reduce((sum, item) => sum + item.count, 0);
         const denominator = entry.type === "stat_ua" ? { kind: "host_nonempty_ua_samples" as const, count: statistics.nonEmptyUaSampleCount, referenceId: `${hostId}:quality:0` }
           : entry.type === "stat_rate" ? { kind: "window_seconds" as const, count: (Date.parse(message.analysisWindow.end) - Date.parse(message.analysisWindow.start)) / 1000, referenceId: `${hostId}:ctx:0`, numerator: statistics.totalEvents }
           : entry.type.startsWith("stat_") || entry.type.startsWith("aggregate_") ? { kind: "host_events" as const, count: statistics.totalEvents, referenceId: `${hostId}:total:0`, ...(numerator === undefined ? {} : { numerator }) } : undefined;
@@ -73,7 +75,7 @@ export function buildHostEvidenceCatalog(input: { message: QueueMessage; zoneTot
       hostIds.push(hostId);
     } catch { unavailableHosts.push(hostId); }
   }
-  return HostEvidenceCatalogSchema.parse({ version: 2, incidentId: message.incidentId, correlationId: message.correlationId, entries, hostIds, unavailableHosts, omitted });
+  return HostEvidenceCatalogSchema.parse({ version: 2, ...ATTENTION_SCOPE, incidentId: message.incidentId, correlationId: message.correlationId, entries, hostIds, unavailableHosts, omitted });
 }
 
 export interface ValidatedHostAIAnalysis {

@@ -24,7 +24,7 @@ function actionRatio(incident: StatisticsInput, actions: readonly string[]): num
   if (incident.totalEvents <= 0 || incident.actionsComplete === false) return null;
   const allowed = new Set(actions);
   const count = incident.evidence.actions
-    .filter((item) => allowed.has(item.value.toLowerCase()))
+    .filter((item) => allowed.has(item.value))
     .reduce((total, item) => total + item.count, 0);
   return ratio(count, incident.totalEvents);
 }

@@ -1,3 +1,4 @@
+import { attentionCounts } from "../../fixtures/blocked-events";
 import { describe, expect, it } from "vitest";
 import { formatHostWeComMessage } from "../../../src/notification/host-formatter";
 import { analyzeHostWafAlert } from "../../../src/analyzers/waf-analyzer";
@@ -10,7 +11,7 @@ import { makeNotificationFixture } from "../../fixtures/host-notifications";
 const options = { timeZone: "Asia/Shanghai", maxLength: 3500, topLimit: 3 };
 async function snapshot(count = 2) {
   return analyzeHostWafAlert({ ...queueMessage, configSnapshot: { ...queueMessage.configSnapshot, hostLimit: count } }, {
-    discoverZone: () => Promise.resolve({ zoneTotalEvents: 2000, topHosts: Array.from({ length: count }, (_, i) => ({ host: `host${String(i)}.example.test`, count: 300 })) }),
+    discoverZone: () => Promise.resolve({ ...attentionCounts(2000), topHosts: Array.from({ length: count }, (_, i) => ({ host: `host${String(i)}.example.test`, count: 300 })) }),
     collectHostSnapshot: (_input, host) => Promise.resolve(makeHost(host.hostId, host.host, host.discoveryCount)),
   }, rulesConfig);
 }
@@ -39,9 +40,34 @@ describe("single multi Host text notification", () => {
     expect(message).not.toContain("规则关注:");
     expect(message).toContain("各排名相互独立");
   });
+  it("retains unknown Action notices and rejects raw scope rather than rebranding it", async () => {
+    const result = await snapshot(1);
+    if (!("incident" in result)) throw new Error("fixture");
+    const host = result.incident.hosts[0];
+    if (host?.collection.aggregates == null) throw new Error("fixture");
+    host.collection.aggregates.actions = [{ value: "unknown", count: 300 }];
+    expect(formatHostWeComMessage({ snapshot: result, ai: fallback }, options)).toContain("部分处理动作未知");
+    Object.assign(host.collection, { eventScope: "raw" });
+    expect(() => formatHostWeComMessage({ snapshot: result, ai: fallback }, options)).toThrow(expect.objectContaining({ code: "notification_scope_invalid" }));
+  });
+  it.each([1999, 2000, 2001])("preserves scope, five Hosts and full IDs at byte budget %i", async (maxLength) => {
+    const result = await snapshot(5);
+    if (!("incident" in result)) throw new Error("fixture");
+    for (const host of result.incident.hosts) if (host.collection.aggregates) host.collection.aggregates.topPaths = [{ value: "/中文😀".repeat(300), count: 100 }];
+    const message = formatHostWeComMessage({ snapshot: { ...result, message: { ...result.message, incidentId: "i".repeat(128), correlationId: "c".repeat(128) } }, ai: fallback }, { ...options, maxLength });
+    expect(new TextEncoder().encode(message).byteLength).toBeLessThanOrEqual(Math.min(maxLength, 2000));
+    expect(message.match(/Host:/gu)).toHaveLength(5);
+    expect(message).toContain("待关注事件（已排除 action=block）");
+    expect(message).toContain("非block不代表攻击成功或已到达源站");
+    expect(message).toContain("incident_id: " + "i".repeat(128));
+    expect(message).toContain("correlation_id: " + "c".repeat(128));
+  });
   it("groups Host facts before advice and keeps identifiers and coverage", async () => {
     const message = formatHostWeComMessage({ snapshot: await snapshot(), ai: fallback }, options);
     expect(message).toContain("Zone: example.test");
+    expect(message).toContain("待关注事件（已排除 action=block）");
+    expect(message).toContain("待关注事件处理分布");
+    expect(message).toContain("非block不代表攻击成功或已到达源站");
     expect(message).toContain("Host: host0.example.test");
     expect(message).toContain("Host: host1.example.test");
     expect(message).toContain("一：Host: host0.example.test");
@@ -55,7 +81,7 @@ describe("single multi Host text notification", () => {
   });
   it("orders precomputed HIGH, MEDIUM, Unknown and LOW attention without recalculating them", async () => {
     const result = await snapshot(4);
-    if (result.status === "collection_failed") throw new Error("fixture");
+    if (!("incident" in result)) throw new Error("fixture");
     const levels = ["LOW", "Unknown", "HIGH", "MEDIUM"] as const;
     result.incident.hosts.forEach((host, index) => { host.ruleAttention = levels[index] ?? "Unknown"; });
     const message = formatHostWeComMessage({ snapshot: result, ai: fallback }, options);
@@ -66,7 +92,7 @@ describe("single multi Host text notification", () => {
   });
   it("keeps five hosts and full IDs under the UTF-8 limit with long details", async () => {
     const result = await snapshot(5);
-    if (result.status === "collection_failed") throw new Error("fixture failed");
+    if (!("incident" in result)) throw new Error("fixture failed");
     for (const host of result.incident.hosts) if (host.collection.aggregates) host.collection.aggregates.topPaths = [{ value: "/" + "界".repeat(2000), count: 100 }];
     const message = formatHostWeComMessage({ snapshot: result, ai: fallback }, options);
     expect(new TextEncoder().encode(message).byteLength).toBeLessThanOrEqual(2000);
@@ -91,15 +117,13 @@ describe("single multi Host text notification", () => {
   });
   it("does not mistake rounded 100.0 percent for an exact all-block outcome", async () => {
     const result = await snapshot(1);
-    if (result.status === "collection_failed") throw new Error("fixture");
+    if (!("incident" in result)) throw new Error("fixture");
     const host = result.incident.hosts[0];
     if (host?.statistics === null || host?.collection.aggregates == null) throw new Error("fixture");
     host.statistics.totalEvents = 2500;
     host.statistics.blockRatio = 99.96;
     host.collection.aggregates.actions = [{ value: "block", count: 2499 }, { value: "allow", count: 1 }];
-    const message = formatHostWeComMessage({ snapshot: result, ai: fallback }, options);
-    expect(message).toContain("block 100.0%");
-    expect(message).not.toContain("全部标记为 block");
+    expect(() => formatHostWeComMessage({ snapshot: result, ai: fallback }, options)).toThrow(expect.objectContaining({ code: "notification_scope_invalid" }));
   });
   it("losslessly represents maximal control-character identifiers with five Hosts", async () => {
     const result = await snapshot(5);
@@ -116,7 +140,7 @@ describe("single multi Host text notification", () => {
   });
   it("shows discovery-only counts for a failed Host without presenting them as analyzed totals", async () => {
     const result = await analyzeHostWafAlert(queueMessage, {
-      discoverZone: () => Promise.resolve({ zoneTotalEvents: 1000, topHosts: [{ host: "example.test", count: 600 }, { host: "www.example.test", count: 300 }] }),
+      discoverZone: () => Promise.resolve({ ...attentionCounts(1000), topHosts: [{ host: "example.test", count: 600 }, { host: "www.example.test", count: 300 }] }),
       collectHostSnapshot: (_input, host) => host.hostId === "h1" ? Promise.reject(new Error("failed")) : Promise.resolve(makeHost(host.hostId, host.host, host.discoveryCount)),
     }, rulesConfig);
     const message = formatHostWeComMessage({ snapshot: result, ai: fallback }, options);
@@ -133,7 +157,7 @@ describe("single multi Host text notification", () => {
   });
   it("retains all failure states with five Hosts and maximum trace IDs", async () => {
     const result = await analyzeHostWafAlert({ ...queueMessage, configSnapshot: { ...queueMessage.configSnapshot, hostLimit: 5 } }, {
-      discoverZone: () => Promise.resolve({ zoneTotalEvents: 2000, topHosts: Array.from({ length: 5 }, (_, i) => ({ host: "host" + String(i) + ".example.test", count: 300 })) }),
+      discoverZone: () => Promise.resolve({ ...attentionCounts(2000), topHosts: Array.from({ length: 5 }, (_, i) => ({ host: "host" + String(i) + ".example.test", count: 300 })) }),
       collectHostSnapshot: (_input, selected) => Promise.resolve({ ...makeHost(selected.hostId, selected.host, 300), hostTotalEvents: 301, collectionStatus: "partial", samplesStatus: "failed", samples: [], errorCode: "cloudflare_timeout" }),
     }, rulesConfig);
     const id = "\u0001".repeat(128);

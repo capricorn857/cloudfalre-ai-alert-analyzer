@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { AppError } from "../observability/errors";
 
-const CountSchema = z.number().int().nonnegative();
+const CountSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const group = <T extends z.ZodRawShape>(dimensions: T) =>
   z.object({ count: CountSchema, dimensions: z.object(dimensions) });
 
@@ -27,7 +27,9 @@ export const AggregateGraphQLResponseSchema = z.object({
 
 export const DiscoveryGraphQLResponseSchema = z.object({
   data: z.object({ viewer: z.object({ zones: z.array(z.object({
-    total: z.array(z.object({ count: CountSchema })).max(1),
+    rawTotal: z.array(z.object({ count: CountSchema })).max(1),
+    attentionTotal: z.array(z.object({ count: CountSchema })).max(1),
+    rawActions: z.array(group({ action: z.string().nullable().optional() })).max(20),
     topHosts: z.array(group({ clientRequestHTTPHost: z.string().nullable() })).max(10),
   })).length(1) }) }),
 });
@@ -35,12 +37,13 @@ export const DiscoveryGraphQLResponseSchema = z.object({
 export const HostGraphQLResponseSchema = z.object({
   data: z.object({ viewer: z.object({ zones: z.array(AggregateZoneSchema.omit({ topHosts: true }).extend({
     total: z.array(z.object({ count: CountSchema })).max(1),
+    actions: z.array(group({ action: z.string().nullable().optional() })),
   })).length(1) }) }),
 });
 
 const SampleSchema = z.object({
   datetime: z.iso.datetime({ offset: true }),
-  action: z.string().min(1),
+  action: z.string().nullable().optional(),
   clientIP: z.string().min(1),
   clientCountryName: z.string().min(1).nullable().optional(),
   clientAsn: z.union([z.number().int().nonnegative(), z.string().min(1)]).nullable().optional(),
@@ -53,7 +56,7 @@ const SampleSchema = z.object({
 export const SamplesGraphQLResponseSchema = z.object({
   data: z.object({
     viewer: z.object({
-      zones: z.array(z.object({ samples: z.array(SampleSchema) })).min(1),
+      zones: z.array(z.object({ samples: z.array(SampleSchema) })).length(1),
     }),
   }),
 });
