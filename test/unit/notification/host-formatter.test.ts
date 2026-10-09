@@ -17,7 +17,76 @@ async function snapshot(count = 2) {
 }
 const fallback: HostAIAnalysisResult = { status: "unavailable", hosts: [] };
 
+function fixtureHost(fixture: ReturnType<typeof makeNotificationFixture>, hostId: string) {
+  const host = fixture.collections.find((item) => item.hostId === hostId);
+  if (host === undefined) throw new Error("fixture Host missing");
+  return host;
+}
+
 describe("single multi Host text notification", () => {
+  it("renders real remaining Action categories and counts", async () => {
+    const fixture = makeNotificationFixture("normal");
+    const result = await analyzeHostWafAlert(fixture.message, {
+      discoverZone: () => Promise.resolve(fixture.discovery),
+      collectHostSnapshot: (_input, selected) => Promise.resolve(fixtureHost(fixture, selected.hostId)),
+    }, rulesConfig);
+    const message = formatHostWeComMessage({ snapshot: result, ai: fallback }, options);
+    expect(message).toContain("log 60（20.0%）");
+    expect(message).toContain("allow 240（80.0%）");
+    expect(message).not.toContain("其他动作保留");
+  });
+  it.each(["raw_mismatch", "zero_zone", "unknown"] as const)("retains Host facts and necessary scope warning for %s", async (mode) => {
+    const fixture = makeNotificationFixture("normal");
+    fixture.discovery.rawTotalEvents += 2;
+    if (mode === "zero_zone") fixture.discovery.zoneTotalEvents = 0;
+    if (mode === "unknown") fixture.discovery.rawActions.push({ action: null, count: 2 });
+    const result = await analyzeHostWafAlert(fixture.message, {
+      discoverZone: () => Promise.resolve(fixture.discovery),
+      collectHostSnapshot: (_input, selected) => Promise.resolve(fixtureHost(fixture, selected.hostId)),
+    }, rulesConfig);
+    const message = formatHostWeComMessage({ snapshot: result, ai: fallback }, options);
+    expect(message.match(/Host:/gu)).toHaveLength(2);
+    expect(message).toContain("聚合");
+    if (mode === "zero_zone") {
+      expect(message).toContain("Zone聚合观察0，与Host发现冲突");
+      expect(message).toContain("占 Zone 未知");
+      expect(message).not.toContain("当前固定窗口零事件");
+    }
+    if (mode === "unknown") expect(message).toContain("未知范围未被可靠覆盖");
+    expect(new TextEncoder().encode(message).byteLength).toBeLessThanOrEqual(2000);
+  });
+  it("shows known non-block context without inventing hosts", async () => {
+    const result = await analyzeHostWafAlert(queueMessage, {
+      discoverZone: () => Promise.resolve({ ...attentionCounts(10), topHosts: [] }), collectHostSnapshot: () => Promise.reject(new Error("must not collect")),
+    }, rulesConfig);
+    const message = formatHostWeComMessage({ snapshot: result, ai: fallback }, options);
+    expect(message).toContain("未取得可用Host明细");
+    expect(message).toContain("原始上下文");
+    expect(message).toContain("10");
+    expect(message).not.toContain("Host:");
+  });
+  it("reserves unknown range and all five Host states with maximal identifiers", async () => {
+    const fixture = makeNotificationFixture("long");
+    fixture.discovery.rawActions.push({ action: null, count: 3 });
+    fixture.discovery.zoneTotalEvents = 0;
+    fixture.discovery.rawTotalEvents = 0;
+    const result = await analyzeHostWafAlert(fixture.message, {
+      discoverZone: () => Promise.resolve(fixture.discovery),
+      collectHostSnapshot: (_input, selected) => {
+        const host = fixtureHost(fixture, selected.hostId);
+        return Promise.resolve({ ...host, samplesStatus: "failed", collectionStatus: "partial", samples: [] });
+      },
+    }, rulesConfig);
+    const message = formatHostWeComMessage({ snapshot: { ...result, message: { ...result.message, incidentId: "i".repeat(128), correlationId: "c".repeat(128) } }, ai: fallback }, options);
+    expect(new TextEncoder().encode(message).byteLength).toBeLessThanOrEqual(2000);
+    expect(message.match(/Host:/gu)).toHaveLength(5);
+    expect(message).toContain("未知范围未被可靠覆盖");
+    expect(message).toContain("Zone聚合观察0，与Host发现冲突");
+    expect(message).toContain("原始总量与Action观察存在零/正冲突");
+    expect(message).toContain("incident_id: " + "i".repeat(128));
+    expect(message).toContain("correlation_id: " + "c".repeat(128));
+    expect(message).toContain("非block不代表攻击成功或已到达源站");
+  });
   it.each(["normal", "partial", "ai_fallback", "long"] as const)("renders the complete fictional %s scenario", async (scenario) => {
     const fixture = makeNotificationFixture(scenario);
     const result = await analyzeHostWafAlert(fixture.message, {

@@ -115,3 +115,14 @@ describe("Host evidence ownership", () => {
     expect(catalog.entries.find((entry) => entry.id === "h0:stat:ua")).toMatchObject({ denominator: { count: 10 } });
   });
 });
+
+it("preserves Host evidence when Zone denominator is unavailable", () => {
+  const local = analyzeHost(makeHost(), 0, hostWindow, rulesConfig);
+  const catalog = buildHostEvidenceCatalog({ ...input, zoneTotalEvents: 0, hosts: [local], zoneDenominatorComparable: false });
+  expect(catalog.hostIds).toEqual(["h0"]);
+  expect(catalog.entries.find((entry) => entry.id === "h0:stat:path")).toMatchObject({denominator: {kind: "host_events", count: 600}});
+});
+it("rejects a forged Zone share under explicitly unavailable denominator", () => {
+  const catalog = buildHostEvidenceCatalog({ ...input, zoneDenominatorComparable: false });
+  expect(catalog.unavailableHosts).toEqual(["h0", "h1"]);
+});

@@ -1,4 +1,4 @@
-import { EventScopeSchema } from "../domain/event-scope";
+import { EventScopeSchema, type DiscoveryQuality } from "../domain/event-scope";
 import { AppError } from "../observability/errors";
 import type { HostSnapshotAnalysisResult } from "../domain/analysis-result";
 import type { HostAIAnalysisResult } from "../analysis/ai-analyzer";
@@ -19,11 +19,25 @@ function dashboardUrl(value: string | undefined): string {
   return "https://dash.cloudflare.com/";
 }
 
-function protection(host: HostAnalysis): string {
+function protection(host: HostAnalysis, compact = false): string {
   const stats = host.statistics;
-  if (stats === null) return "待关注事件处理分布: 未知";
-  if (!host.quality.actionsComplete || stats.totalEvents === 0) return "待关注事件处理分布: 未完整获取";
-  return `待关注事件处理分布: allow ${percentage(stats.allowRatio)}；challenge ${percentage(stats.challengeRatio)}；其他动作保留`;
+  const actions = host.collection.aggregates?.actions;
+  if (stats === null || actions === undefined) return "待关注事件处理分布: 未知";
+  const complete = host.quality.actionsComplete && stats.totalEvents > 0;
+  if (compact) return complete ? "待关注事件处理分布: 明细已省略" : "待关注事件处理分布: 未完整获取（比例未知）";
+  if (actions.length === 0) return "待关注事件处理分布: 未完整获取";
+  return "待关注事件处理分布: " + actions.map((item) => `${escapeValue(item.value)} ${String(item.count)}（${percentage(complete ? item.count / stats.totalEvents * 100 : null)}）`).join("；") + (complete ? "" : "；未完整获取");
+}
+
+function discoveryNotice(quality: DiscoveryQuality): string {
+  const reasons = quality.reasonCodes;
+  const notices: string[] = [];
+  if (reasons.includes("attention_zero_positive_host")) notices.push("过滤后Zone聚合观察0，与Host发现冲突；Zone占比及覆盖未知。");
+  else if (reasons.includes("attention_action_sum_mismatch") || reasons.includes("top_host_sum_exceeds_attention")) notices.push("待关注聚合口径不一致；Zone占比及覆盖未知。");
+  else if (reasons.includes("raw_action_sum_mismatch")) notices.push("原始聚合存在估计差异。");
+  if (reasons.some((reason) => ["action_unknown", "action_distribution_truncated", "action_distribution_duplicate"].includes(reason))) notices.push("部分处理动作未知或分布不完整；未知范围未被可靠覆盖。");
+  if (reasons.includes("raw_zero_positive_evidence") || reasons.includes("raw_positive_no_action_evidence")) notices.push("原始总量与Action观察存在零/正冲突。");
+  return notices.join("\n");
 }
 
 export function formatHostWeComMessage(result: { snapshot: HostSnapshotAnalysisResult; ai: HostAIAnalysisResult }, options: FormatterOptions): string {
@@ -42,7 +56,13 @@ export function formatHostWeComMessage(result: { snapshot: HostSnapshotAnalysisR
   // Identifiers may use a lossless encoding, but are never omitted or truncated.
   const identifiers = [`incident_id: ${escapeIdentifier(message.incidentId)}`, `correlation_id: ${escapeIdentifier(message.correlationId)}`];
   if (!("incident" in snapshot)) {
-    const failureText = snapshot.status === "suppression_ineligible" ? (snapshot.reason === "action_unknown" ? "部分事件处理动作未知，无法可靠保留待关注范围；AI 不可用" : "数据口径不一致，无法可靠判断待关注事件；AI 不可用") : "Cloudflare 数据采集失败；AI 不可用";
+    const failureText = snapshot.status === "suppression_ineligible"
+      ? [snapshot.reason === "no_usable_hosts" ? "未取得可用Host明细；AI 不可用" : "静默依据不足，未取得可用Host明细；AI 不可用",
+        `待关注事件（已排除 action=block）: ${String(snapshot.discovery.zoneTotalEvents)}`,
+        discoveryNotice(snapshot.quality),
+        `原始上下文（估计）：总量 ${String(snapshot.discovery.rawTotalEvents)}；已知非block分类计数和 ${String(snapshot.quality.knownNonBlockCountSum)}`].filter(Boolean).join("\n")
+      : `Cloudflare 数据采集失败；AI 不可用（${snapshot.errorCode}）`;
+
     return assembleBlocks([
     { required: `【Cloudflare WAF 告警】\nZone: ${escapeValue(message.alert.resource)}\n${failureText}`, compact: "【Cloudflare WAF 告警】\nZone: [名称已省略]\n" + failureText, optional: [] },
     { required: advice, optional: [] },
@@ -53,9 +73,11 @@ export function formatHostWeComMessage(result: { snapshot: HostSnapshotAnalysisR
   const zone = incident.zone;
   if (!EventScopeSchema.safeParse(zone).success || incident.hosts.some(({ collection }) => !EventScopeSchema.safeParse(collection).success || (collection.aggregates?.actions.some((item) => item.value === "block") ?? false) || collection.samples.some((sample) => sample.action === "block"))) throw new AppError("notification_scope_invalid", "invalid attention scope", false);
   let catalogMatches = false;
-  try { catalogMatches = ai.catalog !== undefined && JSON.stringify(ai.catalog) === JSON.stringify(buildHostEvidenceCatalog({ message, zoneTotalEvents: zone.zoneTotalEvents, hosts: incident.hosts })); } catch { /* Invalid AI projection uses the rule fallback. */ }
+  try { catalogMatches = ai.catalog !== undefined && JSON.stringify(ai.catalog) === JSON.stringify(buildHostEvidenceCatalog({ message, zoneTotalEvents: zone.zoneTotalEvents, hosts: incident.hosts, zoneDenominatorComparable: zone.discoveryQuality?.zoneDenominatorComparable ?? true })); } catch { /* Invalid AI projection uses the rule fallback. */ }
   const suggestions: string[] = [];
   const sections: MessageSection[] = [{ required: `【Cloudflare WAF 告警】\nZone: ${escapeValue(incident.resource)}；待关注事件（已排除 action=block）: ${String(zone.zoneTotalEvents)}`, compact: `【Cloudflare WAF 告警】\nZone: [名称已省略]；待关注事件（已排除 action=block）: ${String(zone.zoneTotalEvents)}`, optional: [] }];
+  const notice = discoveryNotice(snapshot.quality);
+  if (notice) sections.push({ required: notice, optional: [] });
   const sorted = [...incident.hosts].sort((a, b) => attentionOrder[a.ruleAttention] - attentionOrder[b.ruleAttention] || b.collection.discoveryCount - a.collection.discoveryCount || (a.collection.host < b.collection.host ? -1 : a.collection.host > b.collection.host ? 1 : 0));
   for (const [index, host] of sorted.entries()) {
     const heading = `${hostNumbers[index] ?? String(index + 1)}：Host:`;
@@ -84,7 +106,7 @@ export function formatHostWeComMessage(result: { snapshot: HostSnapshotAnalysisR
     if (collection.aggregates?.actions.some((item) => item.value === "unknown") || collection.samples.some((sample) => sample.action === "unknown")) compactStatus.push("部分处理动作未知");
     if (stats?.totalEvents === 0) compactStatus.push("零事件，数据不足");
     if (validated === undefined) compactStatus.push("AI 降级");
-    const compactProtection = protection(host);
+    const compactProtection = protection(host, true);
     const omittedName = `${collection.hostId}（名称已省略）`;
     const compactName = new TextEncoder().encode(name).byteLength <= new TextEncoder().encode(omittedName).byteLength ? name : omittedName;
     const compact = [`${heading} ${compactName}`, compactProtection, ...(host.ruleAttention === "LOW" ? ["未命中当前关注规则，不代表安全。"] : []), ...compactStatus].join("\n");

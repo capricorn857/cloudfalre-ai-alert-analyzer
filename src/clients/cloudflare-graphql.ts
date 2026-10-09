@@ -90,7 +90,7 @@ export class CloudflareGraphQLClient {
     if (zone === undefined) throw new AppError("cloudflare_response_invalid", "missing zone", false);
     const rawTotalEvents = zone.rawTotal[0]?.count ?? 0;
     const rawActions = zone.rawActions.map((item) => ({ action: item.dimensions.action ?? null, count: item.count }));
-    const complete = rawActions.length < 20 && rawActions.reduce((sum, item) => sum + item.count, 0) === rawTotalEvents
+    const complete = rawActions.every((item) => item.action !== null && item.action !== "") && rawActions.length < 20 && Number.isSafeInteger(rawActions.reduce((sum, item) => sum + item.count, 0))
       && new Set(rawActions.map((item) => item.action)).size === rawActions.length;
     const blockedTotalEvents = complete ? rawActions.filter((item) => item.action === "block").reduce((sum, item) => sum + item.count, 0) : null;
     return ZoneDiscoverySchema.parse({ ...ATTENTION_SCOPE, rawTotalEvents, rawActions, blockedTotalEvents,

@@ -30,7 +30,7 @@ function verifySource(host: HostAnalysis, message: QueueMessage): void {
   if (stats.requestRatePerSecond !== null && stats.requestRatePerSecond !== stats.totalEvents / duration) throw validationError("ai_catalog_invalid", "catalog", "inconsistent_source");
 }
 
-export function buildHostEvidenceCatalog(input: { message: QueueMessage; zoneTotalEvents: number; hosts: readonly HostAnalysis[] }): HostEvidenceCatalog {
+export function buildHostEvidenceCatalog(input: { message: QueueMessage; zoneTotalEvents: number; zoneDenominatorComparable?: boolean; hosts: readonly HostAnalysis[] }): HostEvidenceCatalog {
   const { message } = input;
   const entries: ScopedEvidenceEntry[] = [
     { id: "zone:ctx:0", type: "context", source: "incident.context", scope: "context", owner: { kind: "zone" }, value: { resource: message.alert.resource, analysisWindow: message.analysisWindow } },
@@ -45,6 +45,7 @@ export function buildHostEvidenceCatalog(input: { message: QueueMessage; zoneTot
     if (statistics === null || statistics.totalEvents <= 0 || collection.aggregates === null) continue;
     try {
       verifySource(host, message);
+      if (input.zoneDenominatorComparable === false && statistics.zoneShare !== null) throw validationError("ai_catalog_invalid", "catalog", "inconsistent_source");
       const local = buildEvidenceCatalog({
         incident: { resource: collection.host, analysisWindow: message.analysisWindow, totalEvents: statistics.totalEvents,
           evidence: { ...collection.aggregates, topHosts: [] }, samples: collection.samples },

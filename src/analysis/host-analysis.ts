@@ -25,7 +25,7 @@ export function selectHosts(discovery: ZoneDiscovery, limit: number): { hosts: S
   };
 }
 
-export function analyzeHost(raw: HostCollection, zoneTotalEvents: number, analysisWindow: AnalysisWindow, rulesConfig: RulesConfig): HostAnalysis {
+export function analyzeHost(raw: HostCollection, zoneTotalEvents: number, analysisWindow: AnalysisWindow, rulesConfig: RulesConfig, zoneDenominatorComparable = true): HostAnalysis {
   const collection = HostCollectionSchema.parse(raw);
   const { aggregates, hostTotalEvents: total } = collection;
   const quality: HostQuality = { aggregateConsistent: false, discoveryConsistent: false, actionsComplete: false, sourcesComplete: false, reasons: [] };
@@ -43,7 +43,7 @@ export function analyzeHost(raw: HostCollection, zoneTotalEvents: number, analys
   const statistics = {
     ...calculateStatistics({ totalEvents: total, analysisWindow, evidence: aggregates, samples: collection.samples, actionsComplete: quality.actionsComplete }),
     hostId: collection.hostId,
-    zoneShare: quality.discoveryConsistent && zoneTotalEvents > 0 ? total / zoneTotalEvents * 100 : null,
+    zoneShare: zoneDenominatorComparable && quality.discoveryConsistent && zoneTotalEvents > 0 ? total / zoneTotalEvents * 100 : null,
     nonEmptyUaSampleCount: collection.samples.filter((sample) => sample.userAgent !== null && sample.userAgent.trim().length > 0).length,
   };
   const findings = evaluateRules(statistics, rulesConfig).map((finding) => ({ ...finding, hostId: collection.hostId }));

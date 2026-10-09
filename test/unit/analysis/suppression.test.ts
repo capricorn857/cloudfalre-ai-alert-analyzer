@@ -10,39 +10,44 @@ const discovery = (rawTotalEvents: number, zoneTotalEvents: number, blockedTotal
 });
 
 describe("observed attention suppression", () => {
-  it.each([null, ""])("degrades unknown raw Action %s rather than assuming it is filtered safely", (action) => {
-    expect(decideSuppression({ ...discovery(100, 1, 99), rawActions: [{ action: "block", count: 99 }, { action, count: 1 }] })).toMatchObject({ kind: "degrade", reason: "action_unknown" });
+  it.each([[100,100], [1360,1362], [100,99], [100,101]])("suppresses only-block observations despite independent positive estimates %s/%s", (raw, block) => {
+    expect(decideSuppression(discovery(raw, 0, block))).toMatchObject({ kind: "suppress", reason: "no_attention_events_observed" });
   });
-  it("detects unknown events lost by the negation query", () => {
-    expect(decideSuppression({ ...discovery(100, 0, 100), rawActions: [{ action: "block", count: 99 }, { action: null, count: 1 }] }).kind).toBe("degrade");
+  it("distinguishes a valid raw-empty window", () => {
+    expect(decideSuppression(discovery(0, 0, 0))).toMatchObject({ kind: "raw_empty", reason: "raw_window_empty" });
   });
-  it("degrades a truncated unfiltered Action distribution", () => {
-    expect(decideSuppression({ ...discovery(100, 0, 100), rawActions: Array.from({ length: 20 }, (_, i) => ({ action: String(i), count: 5 })) }).kind).toBe("degrade");
+  it.each([null, ""])("retains valid hosts with unknown original Action %s", (action) => {
+    const result = decideSuppression({ ...discovery(100, 1, 99), rawActions: [{ action: "block", count: 99 }, { action, count: 1 }], topHosts: [{ host: "example.test", count: 1 }] });
+    expect(result).toMatchObject({ kind: "continue", quality: { zoneDenominatorComparable: false, reasonCodes: expect.arrayContaining(["action_unknown"]) as unknown } });
   });
-  it("keeps unrecognized but nonempty Action strings and exact case variants", () => {
-    for (const action of ["future_action", "BLOCK", "block "]) expect(decideSuppression({ ...discovery(100, 1, 99), rawActions: [{ action: "block", count: 99 }, { action, count: 1 }] }).kind).toBe("continue");
+  it.each(["future_action", "BLOCK", "block "])("retains exact non-block Action %s", (action) => {
+    expect(decideSuppression({ ...discovery(100, 1, 99), rawActions: [{ action: "block", count: 99 }, { action, count: 1 }], topHosts: [{ host: "example.test", count: 1 }] }).kind).toBe("continue");
   });
-  it("accepts an internally consistent Adaptive zero without claiming all requests blocked", () => {
-    expect(decideSuppression(discovery(100, 0, 100))).toEqual({ kind: "suppress", reason: "no_attention_events_observed" });
+  it("retains hosts at zero attention total and disables the denominator", () => {
+    expect(decideSuppression({ ...discovery(100, 0, 100), topHosts: [{ host: "example.test", count: 1 }] })).toMatchObject({ kind: "continue", quality: { zoneDenominatorComparable: false, reasonCodes: expect.arrayContaining(["attention_zero_positive_host"]) as unknown } });
   });
-  it("distinguishes original empty from filtered empty", () => {
-    expect(decideSuppression(discovery(0, 0, 0))).toEqual({ kind: "raw_empty", reason: "raw_window_empty" });
+  it("does not let raw estimation differences disable comparable filtered data", () => {
+    expect(decideSuppression({ ...discovery(99, 10, 100), topHosts: [{ host: "example.test", count: 10 }] })).toMatchObject({ kind: "continue", quality: { zoneDenominatorComparable: true, reasonCodes: expect.arrayContaining(["raw_action_sum_mismatch"]) as unknown } });
   });
-  it.each([[100, 1, 99], [10000, 1, 9999]])("never suppresses a positive aggregate even with no selected hosts", (raw, attention, blocked) => {
-    expect(decideSuppression(discovery(raw, attention, blocked)).kind).toBe("continue");
+  it("retains hosts when original actions truncate", () => {
+    expect(decideSuppression({ ...discovery(100, 10, 90), blockedTotalEvents: null, rawActions: Array.from({ length: 20 }, (_, i) => ({ action: String(i), count: 5 })), topHosts: [{ host: "example.test", count: 10 }] })).toMatchObject({ kind: "continue", quality: { zoneDenominatorComparable: false } });
   });
-  it.each([[100, 0, 99], [0, 1, 0], [100, 101, 0], [100, 0, 101]])("degrades contradictory counts", (raw, attention, blocked) => {
-    expect(decideSuppression(discovery(raw, attention, blocked)).kind).toBe("degrade");
+  it("reports non-block evidence without usable hosts", () => {
+    expect(decideSuppression(discovery(100, 1, 99))).toMatchObject({ kind: "degrade", reason: "no_usable_hosts" });
   });
-  it("does not silence when zero contradicts discovery evidence", () => {
-    expect(decideSuppression({ ...discovery(100, 0, 100), topHosts: [{ host: "example.test", count: 1 }] }).kind).toBe("degrade");
+  it.each([
+    { ...discovery(100, 0, 99), rawActions: [{ action: "block", count: 99 }, { action: null, count: 1 }] },
+    { ...discovery(100, 0, 100), rawActions: [] },
+    { ...discovery(0, 0, 1) },
+    { ...discovery(100, 0, 100), topHosts: [{ host: "example.test", count: 0 }] },
+    { ...discovery(100, 0, 100), rawActions: Array.from({ length: 20 }, () => ({ action: "block", count: 5 })) },
+  ])("never suppresses semantic conflicts or incomplete evidence", (input) => {
+    expect(decideSuppression(input).kind).toBe("degrade");
   });
-  it("requires an empty ranking even if all returned host counts are zero", () => {
-    expect(decideSuppression({ ...discovery(100, 0, 100), topHosts: [{ host: "example.test", count: 0 }] }).kind).toBe("degrade");
-  });
-  it("requires every count and explicit scope instead of defaulting missing data", () => {
+  it("requires explicit fields and rejects unsafe sums", () => {
     const missing = Object.fromEntries(Object.entries(discovery(100, 0, 100)).filter(([key]) => key !== "rawTotalEvents"));
     expect(ScopedDiscoverySchema.safeParse(missing).success).toBe(false);
     expect(ScopedDiscoverySchema.safeParse({ ...discovery(100, 0, 100), eventScope: "raw" }).success).toBe(false);
+    expect(ScopedDiscoverySchema.safeParse({ ...discovery(1, 0, 1), rawActions: [{action: "block", count: Number.MAX_SAFE_INTEGER}, {action: "allow", count: 1}] }).success).toBe(false);
   });
 });

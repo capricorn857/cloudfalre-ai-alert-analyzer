@@ -76,3 +76,10 @@ describe("independent Host analysis", () => {
     expect(selection).not.toHaveProperty("totalHosts");
   });
 });
+
+it("retains Host ratios while explicit Zone comparability disables shares and coverage", () => {
+  const host = analyzeHost(makeHost(), 1000, hostWindow, rulesConfig, false);
+  expect(host.statistics).toMatchObject({zoneShare: null, topPath: {ratio: 50}, allowRatio: 0});
+  expect(host.quality.discoveryConsistent).toBe(true);
+  expect(summarizeCoverage(1000, [host], false).coverage.ratio).toBeNull();
+});

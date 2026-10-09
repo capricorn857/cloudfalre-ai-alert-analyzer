@@ -22,7 +22,7 @@ export async function runHostAIAnalysis(snapshot: HostSnapshotAnalysisResult, cl
   const unavailable = (reason: string): HostAIResult[] => ids.map((hostId) => ({ hostId, status: "unavailable", reason }));
   let catalog: HostEvidenceCatalog;
   try {
-    catalog = buildHostEvidenceCatalog({ message: snapshot.message, zoneTotalEvents: snapshot.incident.zone.zoneTotalEvents, hosts: snapshot.incident.hosts });
+    catalog = buildHostEvidenceCatalog({ message: snapshot.message, zoneTotalEvents: snapshot.incident.zone.zoneTotalEvents, hosts: snapshot.incident.hosts, zoneDenominatorComparable: snapshot.incident.zone.discoveryQuality?.zoneDenominatorComparable ?? true });
   } catch { return { status: "unavailable", hosts: unavailable("ai_catalog_invalid"), failure: { failureSource: "catalog", errorCode: "ai_catalog_invalid", retryable: false, validationStage: "catalog", validationReason: "invalid_catalog", validationPaths: ["root"] } }; }
   if (catalog.hostIds.length === 0) return { status: "unavailable", hosts: unavailable("ai_data_insufficient"), catalog };
   try {

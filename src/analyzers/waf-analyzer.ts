@@ -21,10 +21,10 @@ export async function analyzeHostWafAlert(message: QueueMessage, client: HostAna
     return { status: "collection_failed", message, errorCode: failure.errorCode, failure, collectionMetrics };
   }
   const decision = decideSuppression(discovery);
-  if (decision.kind === "suppress") return { status: "suppressed", message, discovery, reason: decision.reason, collectionMetrics };
-  if (decision.kind === "degrade") return { status: "suppression_ineligible", message, discovery, reason: decision.reason, collectionMetrics };
+  if (decision.kind === "suppress") return { status: "suppressed", message, discovery, quality: decision.quality, reason: decision.reason, collectionMetrics };
+  if (decision.kind === "degrade") return { status: "suppression_ineligible", message, discovery, quality: decision.quality, reason: decision.reason, collectionMetrics };
   const selection = selectHosts(discovery, message.configSnapshot.hostLimit);
-  const selected = discovery.zoneTotalEvents === 0 ? [] : selection.hosts;
+  const selected = selection.hosts;
   const results: HostCollection[] = [];
   let cursor = 0;
   async function collect(): Promise<void> {
@@ -46,13 +46,13 @@ export async function analyzeHostWafAlert(message: QueueMessage, client: HostAna
     }
   }
   await Promise.all([collect(), collect()]);
-  const hosts = results.map((result) => analyzeHost(result, discovery.zoneTotalEvents, message.analysisWindow, rulesConfig));
-  const discoveryConsistent = discovery.topHosts.reduce((sum, host) => sum + host.count, 0) <= discovery.zoneTotalEvents;
+  const hosts = results.map((result) => analyzeHost(result, discovery.zoneTotalEvents, message.analysisWindow, rulesConfig, decision.quality.zoneDenominatorComparable));
+  const discoveryConsistent = decision.kind === "raw_empty" || decision.quality.zoneDenominatorComparable;
   const summary = summarizeCoverage(discovery.zoneTotalEvents, hosts, discoveryConsistent);
   const incident = HostIncidentSchema.parse({ ...message.alert, incidentId: message.incidentId, correlationId: message.correlationId,
     queryStartedAt: message.queryStartedAt, analysisWindow: message.analysisWindow,
-    hosts, zone: { ...ATTENTION_SCOPE, rawTotalEvents: discovery.rawTotalEvents, blockedTotalEvents: discovery.blockedTotalEvents, countQuality: discovery.countQuality, ...summary, zoneTotalEvents: discovery.zoneTotalEvents, discoveredHosts: discovery.topHosts,
+    hosts, zone: { ...ATTENTION_SCOPE, discoveryQuality: decision.quality, rawTotalEvents: discovery.rawTotalEvents, blockedTotalEvents: discovery.blockedTotalEvents, countQuality: discovery.countQuality, ...summary, zoneTotalEvents: discovery.zoneTotalEvents, discoveredHosts: discovery.topHosts,
       selectedHostCount: selected.length, topHostsTruncated: selection.topHostsTruncated, invalidHostEvents: selection.invalidHostEvents } });
-  const partial = !discoveryConsistent || summary.failedHostCount > 0 || summary.qualityFailedHostCount > 0 || summary.sampleFailedHostCount > 0 || summary.coverage.status === "inconsistent";
-  return { status: partial ? "partial" : discovery.zoneTotalEvents === 0 ? "empty" : "success", message, incident, collectionMetrics };
+  const partial = (decision.kind !== "raw_empty" && decision.quality.reasonCodes.length > 0) || !discoveryConsistent || summary.failedHostCount > 0 || summary.qualityFailedHostCount > 0 || summary.sampleFailedHostCount > 0 || summary.coverage.status === "inconsistent";
+  return { status: partial ? "partial" : discovery.zoneTotalEvents === 0 ? "empty" : "success", message, incident, discovery, quality: decision.quality, collectionMetrics };
 }

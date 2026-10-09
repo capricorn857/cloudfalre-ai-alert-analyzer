@@ -48,7 +48,9 @@ describe("Host formatter program templates", () => {
     expect(message).toContain("来源 IP:\n[192.0.2.10]");
     expect(message).toContain("目标路径:\n[/api/login]");
     expect(message).toContain("https://dash.cloudflare.com/example/security/events");
-    expect(message).toContain("allow 87.5%");
+    expect(message).toContain("allow 350（87.5%）");
+    expect(message).toContain("log 30（7.5%）");
+    expect(message).toContain("managed_challenge 20（5.0%）");
     expect(message).not.toContain("攻击类型未确定");
     expect(message).toContain("incident_id: correlation-123");
     expect(message).toContain("correlation_id: correlation-123");

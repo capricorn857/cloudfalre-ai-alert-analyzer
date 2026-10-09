@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { EventScopeSchema, ScopedDiscoverySchema } from "./event-scope";
+import { EventScopeSchema, ScopedDiscoverySchema, DiscoveryQualitySchema } from "./event-scope";
 import { EvidenceItemSchema, SecurityEventSampleSchema, IncidentSchema } from "./incident";
 import { StatisticsSchema } from "./statistics";
 import { FindingSchema } from "./finding";
@@ -72,6 +72,7 @@ export type HostStatistics = z.infer<typeof HostStatisticsSchema>;
 export type HostQuality = z.infer<typeof HostQualitySchema>;
 
 export const ZoneOverviewSchema = z.object({
+  discoveryQuality: DiscoveryQualitySchema.optional(),
   ...EventScopeSchema.shape,
   rawTotalEvents: EventCountSchema, blockedTotalEvents: EventCountSchema.nullable(),
   countQuality: z.literal("estimated"),

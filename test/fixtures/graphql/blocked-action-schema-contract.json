@@ -499,11 +499,12 @@
       "topHosts"
     ],
     "rawActionsLimit": 20,
-    "unknownActionPolicy": "degrade_before_host_or_ai",
-    "requiresCompleteDistinctRawActions": true,
-    "compareRawAndAttentionAgainstRawActions": true,
-    "blockedCountSource": "exact block group in complete rawActions",
-    "samplingRiskAccepted": true
+    "unknownActionPolicy": "prevent_suppression_preserve_validated_hosts",
+    "requiresCompleteDistinctRawActions": "suppression_only",
+    "compareRawAndAttentionAgainstRawActions": "quality_flags_not_global_equality_gate",
+    "blockedCountSource": "direct exact block estimate from structurally complete determinate rawActions; raw total equality not required",
+    "samplingRiskAccepted": true,
+    "decisionVersion": "aggregate-quality-v2"
   },
   "limitations": [
     "Preservation of underlying null/missing Action by inequality on both datasets",
@@ -514,5 +515,20 @@
     "Both input schemas have no dedicated null predicate; aggregate action:null, action_neq:null and OR with action:null returned GraphQL errors.",
     "Current successful samples are empty and observed actions are block only; these cannot prove behavior for missing or future action records.",
     "The approved design explicitly forbids treating output string! alone as proof that underlying missing Action cannot be lost by negation."
-  ]
+  ],
+  "historicalRuntimeProtection": {
+    "nullNegationAssumed": false,
+    "aliases": [
+      "rawTotal",
+      "attentionTotal",
+      "rawActions",
+      "topHosts"
+    ],
+    "rawActionsLimit": 20,
+    "unknownActionPolicy": "degrade_before_host_or_ai",
+    "requiresCompleteDistinctRawActions": true,
+    "compareRawAndAttentionAgainstRawActions": true,
+    "blockedCountSource": "exact block group in complete rawActions",
+    "samplingRiskAccepted": true
+  }
 }

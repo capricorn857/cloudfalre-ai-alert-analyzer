@@ -14,6 +14,26 @@ const dependencies = (discovery = discovered()) => ({
 });
 
 describe("blocked event policy in Workers pipeline", () => {
+  it("records controlled final decision diagnostics for a suppressed window", async () => {
+    const deps = dependencies();
+    await processHostAlert(queueMessage, deps);
+    expect(deps.logger.info).toHaveBeenCalledWith("alert_decision", expect.objectContaining({
+      final_decision: "suppressed", policy_id: "exclude-exact-block-v1", decision_version: "aggregate-quality-v2",
+      raw_total_events: 100, attention_total_events: 0, raw_action_count_sum: 100,
+      action_counts: [{ category: "block", count: 100 }], action_distribution_truncated: false,
+      unknown_action_count: 0, filtered_top_host_count: 0, filtered_top_host_count_sum: 0,
+      ai_called: false, wecom_called: false, invalid_ratios: expect.any(Array) as unknown, comparisons: expect.any(Array) as unknown,
+    }));
+  });
+  it("does not log unknown raw Action text", async () => {
+    const deps = dependencies({ ...discovered(100, 1, 99), rawActions: [{ action: "block", count: 99 }, { action: "private-path-/login?secret=fictional", count: 1 }] });
+    await processHostAlert(queueMessage, deps);
+    const log = JSON.stringify([...deps.logger.info.mock.calls, ...deps.logger.warn.mock.calls]);
+    expect(log).toContain("other_non_block");
+    expect(log).not.toContain("private-path");
+    expect(log).toContain('"ai_called":false');
+    expect(log).toContain('"wecom_called":true');
+  });
   it("suppresses observed zero without LLM or notification", async () => {
     const deps = dependencies();
     expect(await processHostAlert(queueMessage, deps)).toMatchObject({ status: "suppressed", snapshotStatus: "suppressed", aiStatus: "not_requested" });
@@ -44,11 +64,10 @@ describe("blocked event policy in Workers pipeline", () => {
     expect(await processHostAlert(queueMessage, deps)).toMatchObject({ status: "sent", snapshotStatus: "empty" });
     expect(deps.notification.send).toHaveBeenCalledOnce(); expect(deps.ai.analyzeHosts).not.toHaveBeenCalled();
   });
-  it("degrades a zero contradicted by the direct block count", async () => {
+  it("silences a block-only positive estimate difference", async () => {
     const deps = dependencies(discovered(100, 0, 99));
-    expect(await processHostAlert(queueMessage, deps)).toMatchObject({ status: "sent", snapshotStatus: "suppression_ineligible" });
-    expect(deps.notification.send).toHaveBeenCalledOnce(); expect(deps.ai.analyzeHosts).not.toHaveBeenCalled();
-    expect(deps.notification.send.mock.calls[0]?.[0]).toContain("数据口径不一致");
+    expect(await processHostAlert(queueMessage, deps)).toMatchObject({ status: "suppressed", snapshotStatus: "suppressed" });
+    expect(deps.notification.send).not.toHaveBeenCalled(); expect(deps.ai.analyzeHosts).not.toHaveBeenCalled();
   });
   it("sends a degraded notification if unfiltered actions contain an unknown category", async () => {
     const deps = dependencies(discovered(100, 0, 99));
@@ -63,4 +82,18 @@ describe("blocked event policy in Workers pipeline", () => {
     expect(await processHostAlert(queueMessage, deps)).toMatchObject({ status: "sent", snapshotStatus: "collection_failed" });
     expect(deps.notification.send).toHaveBeenCalledOnce(); expect(deps.ai.analyzeHosts).not.toHaveBeenCalled();
   });
+});
+
+it("logs the discovery decision before external calls and actual terminal outcome afterward", async () => {
+  const deps = dependencies(discovered(0, 0, 0));
+  const order: string[] = [];
+  deps.logger.info.mockImplementation((event: string) => { order.push(event); });
+  deps.notification.send.mockImplementation(() => { order.push("notify"); return Promise.resolve(); });
+  await processHostAlert(queueMessage, deps);
+  const initial = deps.logger.info.mock.calls.find(([event]) => event === "analysis_decision");
+  expect(initial?.[1]).toMatchObject({decision_phase: "before_external_calls", decision: "basic_exception", ai_called: false, wecom_called: false, llm_api_status: "not_requested", wecom_status: "not_requested"});
+  expect(initial?.[1]).not.toHaveProperty("final_decision");
+  expect(order.indexOf("analysis_decision")).toBeLessThan(order.indexOf("notify"));
+  expect(order.indexOf("alert_decision")).toBeGreaterThan(order.indexOf("notify"));
+  expect(deps.logger.info.mock.calls.find(([event]) => event === "alert_decision")?.[1]).toMatchObject({final_decision: "basic_exception", ai_called: false, wecom_called: true, wecom_status: "sent"});
 });

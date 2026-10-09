@@ -15,6 +15,9 @@ const clientFor = (...zones: unknown[]) => {
  return { fetchFn, client: new CloudflareGraphQLClient({ token: "test", fetchFn, retries: 0, timeoutMs: 1000 }) };
 };
 describe("exact block scoped GraphQL", () => {
+ it("preserves direct block estimates when raw and grouped counts differ", async () => {
+  expect(await clientFor({ ...discovery, rawTotal: [{ count: 1360 }], attentionTotal: [], rawActions: [{ count: 1362, dimensions: { action: "block" } }], topHosts: [] }).client.discoverZone(input)).toMatchObject({ rawTotalEvents: 1360, blockedTotalEvents: 1362, zoneTotalEvents: 0 });
+ });
  it("uses four guard aliases and independent estimated block counts", async () => {
   const { client, fetchFn } = clientFor(discovery);
   expect(await client.discoverZone(input)).toMatchObject({ eventScope: "attention", rawTotalEvents: 10, zoneTotalEvents: 3, blockedTotalEvents: 6, countQuality: "estimated" });
@@ -63,4 +66,8 @@ describe("exact block scoped GraphQL", () => {
   const { client } = clientFor(aggregate, { samples: [{ datetime: input.analysisWindow.start, action: "block", clientIP: "192.0.2.1", clientRequestHTTPHost: selected.host }] });
   expect(await client.collectHostSnapshot(input, selected)).toMatchObject({ collectionStatus: "partial", hostTotalEvents: 2, samplesStatus: "failed", samples: [] });
  });
+});
+
+it.each([null, undefined, ""])("keeps direct block estimate unavailable with unknown raw Action %s", async (action) => {
+  expect(await clientFor({ ...discovery, rawActions: [{count: 99, dimensions: {action: "block"}}, {count: 1, dimensions: {action}}] }).client.discoverZone(input)).toMatchObject({blockedTotalEvents: null});
 });
